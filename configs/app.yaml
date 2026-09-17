@@ -1,0 +1,18 @@
+app:
+  grid_meters: 20
+  area_soft_limit_km2: 400
+  seed: 202503
+  schema_version: "1.0"
+  workflow_version: "0.1.0"
+budgets:
+  max_tool_calls: 20
+  max_replans: 2
+  max_tool_retries: 1
+  max_schema_repairs: 1
+  max_llm_calls: 8
+  recursion_limit: 80
+scientific:
+  max_experiments: 3
+  max_replans: 2
+  max_data_reads: 3
+  max_llm_calls: 8

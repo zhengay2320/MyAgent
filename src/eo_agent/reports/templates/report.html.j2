@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EO-Agent 模拟报告 {{ facts.task_id }}</title>
+  <style>
+    body{font-family:system-ui,sans-serif;margin:0;background:#f4f7f5;color:#193129}
+    main{max-width:920px;margin:auto;padding:24px}.notice{background:#fff1c7;border:2px solid #b66b00;padding:18px;font-weight:700}
+    section{background:white;margin:16px 0;padding:20px;border-radius:8px;box-shadow:0 2px 8px #0001}
+    .mock{color:#9b2c2c;font-weight:700}dt{font-weight:700}dd{margin-bottom:8px}code{word-break:break-all}
+  </style>
+</head>
+<body><main>
+  <div class="notice">{{ facts.notice }}</div>
+  <h1>两时期地表变化流程报告</h1>
+  <p class="mock">MOCK / 模拟结果：{{ facts.contains_mock }}</p>
+  <section><h2>任务范围</h2><dl>
+    <dt>任务 ID</dt><dd>{{ facts.task_id }}</dd>
+    <dt>原始指令</dt><dd>{{ facts.query }}</dd>
+    <dt>区域</dt><dd>{{ facts.aoi_name }} ({{ facts.aoi_id }})</dd>
+    <dt>状态</dt><dd>{{ facts.status.value }}</dd>
+    <dt>LLM profile</dt><dd>{{ facts.model_profile }}</dd>
+  </dl></section>
+  <section><h2>结果</h2>
+    <p>{{ facts.conclusion }}</p>
+    <p>变化面积：{% if facts.change_area_km2 is none %}<strong>无法判断</strong>{% else %}{{ facts.change_area_km2 }} km²（模拟）{% endif %}</p>
+    <p>变化比例：{% if facts.changed_fraction is none %}<strong>无法判断</strong>{% else %}{{ facts.changed_fraction }}（分母：{{ facts.change_area_denominator_km2 }} km²，{{ facts.change_fraction_denominator }}）{% endif %}</p>
+    <p>核验：{{ facts.verification_status }}</p><p>{{ summary }}</p>
+  </section>
+  <section><h2>步骤与工具</h2><ol>{% for step in facts.steps %}<li>{{ step }}</li>{% endfor %}</ol>
+  <ul>{% for tool in facts.tool_implementations %}<li><code>{{ tool }}</code></li>{% endfor %}</ul></section>
+  <section><h2>限制</h2><ul>{% for item in facts.limitations %}<li>{{ item }}</li>{% endfor %}</ul></section>
+</main></body></html>
