@@ -1,0 +1,8 @@
+scenarios:
+  clear: {cloud_fraction: 0.08, available: true, verification: sufficient}
+  cloudy: {cloud_fraction: 0.72, available: true, verification: sufficient}
+  needs_evidence: {cloud_fraction: 0.18, available: true, verification: needs_evidence}
+  no_data: {cloud_fraction: null, available: false, verification: unavailable}
+  temporary_failure: {cloud_fraction: 0.12, available: true, verification: sufficient, fail_once: prepare_data}
+  insufficient: {cloud_fraction: 0.22, available: true, verification: insufficient}
+

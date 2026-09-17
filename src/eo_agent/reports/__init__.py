@@ -1,0 +1,1 @@
+"""Fact-bound report generation."""

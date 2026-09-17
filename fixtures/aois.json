@@ -1,0 +1,17 @@
+{
+  "wuhan_demo_100km2": {
+    "name": "武汉演示区",
+    "area_km2": 100,
+    "geometry_ref": "synthetic://wuhan-demo-grid",
+    "is_synthetic": true,
+    "description": "合成测试元数据，不代表武汉行政边界或真实面积测量"
+  },
+  "large_demo_500km2": {
+    "name": "大型合成测试区",
+    "area_km2": 500,
+    "geometry_ref": "synthetic://large-demo-grid",
+    "is_synthetic": true,
+    "description": "用于面积超限测试的合成元数据"
+  }
+}
+

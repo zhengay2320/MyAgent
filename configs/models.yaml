@@ -1,0 +1,28 @@
+profiles:
+  mock:
+    provider: mock
+    adapter: mock
+    model: mock-rule-parser-v1
+    prompt_version: eo-v0.1
+    json_response_format: false
+    generation_params: {}
+  deepseek_dev:
+    provider: deepseek
+    adapter: openai_compatible
+    api_key_env: DEEPSEEK_API_KEY
+    base_url_env: DEEPSEEK_BASE_URL
+    model_env: DEEPSEEK_MODEL
+    prompt_version: eo-v0.1
+    json_response_format: true
+    generation_params:
+      temperature: 0
+  second_compatible:
+    provider: compatible
+    adapter: openai_compatible
+    api_key_env: SECOND_API_KEY
+    base_url_env: SECOND_BASE_URL
+    model_env: SECOND_MODEL
+    prompt_version: eo-v0.1
+    json_response_format: false
+    generation_params: {}
+
