@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 
+from eo_agent.imagery.router import install_imagery_routes
 from eo_agent.schemas import TaskRequest
 from eo_agent.service import TaskService
 
@@ -13,6 +14,7 @@ def create_app(output_dir: str | Path = "outputs/api") -> FastAPI:
     app = FastAPI(title="EO-Agent V0.1", version="0.1.0")
     service = TaskService(output_dir)
     app.state.service = service
+    install_imagery_routes(app, output_dir)
 
     @app.get("/health")
     def health() -> dict[str, str]:

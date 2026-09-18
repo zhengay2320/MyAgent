@@ -1,6 +1,6 @@
 # EO-Agent 项目约定
 
-- Python 3.11+；安装：`python -m pip install -e ".[dev]"`。
+- Python 3.11+；完整安装：`python -m pip install -e ".[dev,imagery]"`。
 - 测试：`python -m pytest -q`；检查：`python -m ruff check .`。
 - 离线验收：`python -m eo_agent demo --scenario cloudy --output-dir outputs/demo`。
 - 默认必须使用 `mock` profile，模拟信息必须传播到工具结果、JSON 与报告首屏。
@@ -10,6 +10,18 @@
 - 真实兼容模型必须显式选 profile；失败不得回退到 Mock，密钥不得进入日志或产物。
 - 新算法通过 `ToolRegistry` 替换实现；新模型通过 `LLMClient`/配置 profile 接入。
 - `outputs/` 是运行时目录；不要把生成任务或 SQLite 数据提交为源码。
+- `data/downloads/` 是审批后的影像运行时目录；不得提交生成的 GeoTIFF、缩略图或清单。
+
+## 交互式影像准备 V1 稳定约束
+
+- `/imagery` 与 `/api/imagery/*` 是新增独立入口；不得改变 legacy/scientific 的默认语义。
+- 正式像元下载只能消费事务性 `ApprovalRecord`；确认前不得调用 getDownloadURL 或创建目标影像文件。
+- 计划版本和哈希必须绑定候选、波段、共享 CRS/仿射网格、分块和后端绝对目录；任一变化重新确认。
+- SQLite 是任务、事件、LLM 调用与审批的一致性来源；SSE 只读事件，不触发工作或下载。
+- 真实 GEE 只能显式选择，延迟初始化，绝不自动认证或回退 Mock；签名 URL 不得进入事件、模型或文件。
+- 质量比例必须按用户 AOI 面积或明确有效面积计算；未知/覆盖不足不得写成 0% 云或没有变化。
+- 页面只按候选 ID、文件 ID 和 artifact ID 操作；不得暴露任意 URL 抓取、任意文件读取或模型决定目录。
+- 下载使用 `.part`、有限重试、取消检查、SHA-256 与 GeoTIFF 网格/波段/有效像元校验；本地预览必须读正式文件。
 
 ## HERA-Change 增量迁移稳定约束
 

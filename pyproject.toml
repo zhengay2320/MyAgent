@@ -21,6 +21,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9", "ruff>=0.8,<1"]
+imagery = [
+  "earthengine-api>=1.5,<2",
+  "numpy>=1.26,<3",
+  "pillow>=10,<13",
+  "pyproj>=3.6,<4",
+  "rasterio>=1.3,<2",
+  "shapely>=2,<3",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -30,7 +38,12 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-eo_agent = ["reports/templates/*.j2"]
+eo_agent = [
+  "reports/templates/*.j2",
+  "imagery/templates/*.html",
+  "imagery/static/*.js",
+  "imagery/static/*.css",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

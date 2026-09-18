@@ -24,7 +24,7 @@ Windows PowerShell：
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,imagery]"
 ```
 
 Linux/macOS：
@@ -32,7 +32,7 @@ Linux/macOS：
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev]'
+python -m pip install -e '.[dev,imagery]'
 ```
 
 若系统没有 `py` 启动器，直接使用 Python 3.11 可执行文件创建环境。本项目不需要
@@ -86,7 +86,10 @@ CLI 输出任务 ID、终态、模拟标识、完整步骤和实际报告绝对�
 python -m eo_agent serve --host 127.0.0.1 --port 8000 --output-dir outputs/api
 ```
 
-打开 `http://127.0.0.1:8000/docs`。这是同步本地原型，不适合长时间计算、公网或多用户生产服务。
+打开 `http://127.0.0.1:8000/docs` 查看旧接口，或打开
+`http://127.0.0.1:8000/imagery` 使用中文交互式影像准备页面。影像页面创建任务后由有上限的
+本地后台执行器处理，状态、模型实际输入输出、工具动作和逐文件进度通过 SSE 实时恢复；旧
+legacy/scientific 端点仍保持原语义。本地服务默认只建议绑定 `127.0.0.1`，不适合公网或多用户生产。
 
 请求示例：
 
@@ -110,6 +113,53 @@ curl -X POST http://127.0.0.1:8000/api/tasks/run \
 
 接口包括 `GET /health`、同步 `POST /api/tasks/run`、任务、轨迹、报告和按 `artifact_id`
 下载产物的查询接口。下载接口不接受文件路径。
+
+## 交互式影像准备 V1
+
+该功能只负责“理解条件—检索候选—AOI 内质量检查—建议光学/SAR—用户审批—下载与校验”，
+不执行去云推理、变化检测或原因分析。默认模型和数据后端都是 Mock，但会真实经过相同的任务状态、
+LLM 结构输出、候选校验、审批哈希、分块写入、Rasterio 校验、本地缩略图和 SQLite 事件路径。
+
+```bash
+python -m eo_agent imagery doctor --provider mock
+python -m eo_agent serve --host 127.0.0.1 --port 8000 --output-dir outputs/api
+```
+
+页面支持粘贴/上传 WGS84 Polygon/MultiPolygon，或选择内置的
+`wuhan_sample_plot_wgs84` 固定研究方框（不是武汉行政边界）。模糊地名不会被自动变成边界。
+搜索和小型预览不等于正式下载：流程必须停在 `WAITING_DOWNLOAD_APPROVAL`，只有用户确认当前
+`plan_version`、`plan_hash`、候选、波段、共享网格和目录后才创建正式文件。刷新页面只按 task ID
+恢复；不会重新检索或重复下载。
+
+默认下载根目录是项目中的 `data/downloads/`，每个任务实际写入独立的
+`data/downloads/<task_id>/`。页面可修改根目录，并会显示解析后的绝对路径；该目录位于运行
+Python 后端的机器。目标目录在批准前不会创建，已有同名正式文件不会被隐式覆盖。
+
+影像控制状态位于 `<output-dir>/imagery/`，SQLite 位于
+`<output-dir>/imagery.sqlite3`。正式目录包含 GeoTIFF、质量层、产品/审批元数据、脱敏日志、SHA-256
+清单和从实际下载文件生成的 PNG 缩略图。Mock 候选与文件始终标记为模拟来源。
+
+### Earth Engine
+
+真实后端仅在页面显式选择 `gee` 后启用，代码固定使用：
+
+- `COPERNICUS/S2_SR_HARMONIZED`；
+- `GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED`；
+- `COPERNICUS/S1_GRD`（IW、VV/VH）。
+
+先由用户在自己的环境完成 Earth Engine 认证，然后设置 Cloud 项目：
+
+```powershell
+earthengine authenticate
+$env:EE_PROJECT_ID="你的已授权 Cloud Project ID"
+python -m eo_agent imagery doctor --provider gee
+python -m eo_agent imagery doctor --provider gee --check-remote
+```
+
+默认 doctor 只检查本地依赖和配置；只有显式 `--check-remote` 才执行小型只读初始化检查，不下载
+影像、不调用 LLM。应用永远不会调用 `ee.Authenticate()`、不会自动弹出认证，也不会在失败时切换
+到 Mock。当前仓库完成了真实目录、预览、AOI 面积质量、SAR 和审批后短时下载 URL 的实现及测试替身，
+但本次开发没有凭据，因此没有验证真实连接或真实影像下载。
 
 ## 产物与数据库
 
@@ -146,6 +196,11 @@ Linux/macOS 使用 `export` 设置同名变量。第二兼容服务使用 `SECON
 JSON 修复、网络重试均有上限，401/403 不盲目重试。当前只用 `httpx.MockTransport` 验证了
 兼容协议，没有密钥时不会做真实 API 验证。
 
+影像页面同样复用 `deepseek_dev` 与 `second_compatible`。完整脱敏 messages、Schema、可见候选、
+生效参数、实际响应、解析校验、动作是否接受和实际工具参数均按 task/call/attempt 保存并展示；密钥、
+认证头和签名 URL 不落盘。当前 profile 未声明经过验证的流式协议，因此页面明确等待完整响应，不伪造
+逐字输出；完整 JSON 通过校验前不会执行动作。
+
 ## 测试与检查
 
 ```bash
@@ -168,7 +223,9 @@ python -m ruff check .
 - `profile ... 缺少配置`：补齐该 profile 的三个环境变量，或明确使用 `--model mock`。
 - `WAITING_INPUT`：检查 AOI、两个月份、面积上限或任务是否超出“两时期对比”。
 - `PARTIAL`：查看报告中的无数据/证据不足原因；它不表示“没有变化”。
-- 当前不包含真实影像查询、真实去云、真实变化算法、训练、城市级计算、断点续跑或异步队列。
-  SQLite/文件持久化只保存完成的执行信息，不等于工作流检查点恢复。
+- 交互式影像准备已包含真实 Earth Engine 适配代码，但未在本次开发环境验证凭据、配额、真实连接或
+  真实下载；不包含导出任务、字节级 Range 续传、多进程协调或公网部署。
+- 当前不包含真实去云、真实变化算法、训练或城市级计算。影像准备的 Mock GeoTIFF 是确定性合成数据，
+  不代表任何地点的真实观测。
 - scientific P1 只包含 E1—E3 离线模拟；E4—E7、训练风险/价值模型、完整调用成本账本、
   真实数据接入、基准评估和论文结论均未实现。

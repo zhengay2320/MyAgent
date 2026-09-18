@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token | default('') }}">
+    <title>交互式影像准备 · EO-Agent</title>
+    <link rel="stylesheet" href="/imagery/static/imagery.css?v=imagery-prep-v1-1">
+    <script src="/imagery/static/imagery.js?v=imagery-prep-v1-1" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="app-header">
+      <div class="brand-block">
+        <span class="brand-mark" aria-hidden="true">EO</span>
+        <div>
+          <p class="eyebrow">EO-Agent · Imagery Preparation V1</p>
+          <h1>交互式影像准备</h1>
+        </div>
+      </div>
+      <div class="header-status" aria-live="polite">
+        <span id="connection-badge" class="status-pill status-neutral">尚未连接</span>
+        <span id="mode-badge" class="status-pill status-mock">模拟模型 · 模拟数据</span>
+      </div>
+    </header>
+
+    <div id="global-message" class="global-message" role="status" aria-live="polite" hidden></div>
+
+    <main id="main-content" class="workspace">
+      <aside class="control-column" aria-label="任务输入与下载审批">
+        <section class="panel panel-accent" aria-labelledby="create-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="step-label">01 · 定义任务</p>
+              <h2 id="create-heading">研究条件</h2>
+            </div>
+            <span class="help-text">创建后后台开始解析与检索</span>
+          </div>
+
+          <form id="task-form" novalidate>
+            <label for="task-query">你要准备什么影像？</label>
+            <textarea id="task-query" name="query" rows="5" required
+              placeholder="例如：准备 2023 年 7 月与 2024 年 7 月武汉试验区的 Sentinel-2 对比影像；若光学质量不足，请评估是否需要 Sentinel-1。"></textarea>
+            <p class="field-note">模型只拆解任务和推荐真实候选；不会扩大区域、日期，也不能批准下载。</p>
+
+            <div class="two-columns">
+              <div>
+                <label for="model-profile">模型</label>
+                <select id="model-profile" name="model_profile">
+                  <option value="mock">MockLLM（离线）</option>
+                </select>
+              </div>
+              <div>
+                <label for="data-provider">数据后端</label>
+                <select id="data-provider" name="provider">
+                  <option value="mock">Mock（离线合成数据）</option>
+                </select>
+              </div>
+            </div>
+
+            <fieldset class="aoi-fieldset">
+              <legend>研究区（必须具有真实几何）</legend>
+              <div class="segmented-control" role="radiogroup" aria-label="研究区输入方式">
+                <label><input type="radio" name="aoi-mode" value="geojson" checked> 粘贴或上传 GeoJSON</label>
+                <label><input type="radio" name="aoi-mode" value="registered"> 已登记研究区</label>
+              </div>
+
+              <div id="geojson-input-group">
+                <label class="file-button" for="geojson-file">上传 .geojson / .json</label>
+                <input id="geojson-file" class="visually-hidden" type="file" accept=".geojson,.json,application/geo+json,application/json">
+                <label class="visually-hidden" for="geojson-text">GeoJSON 内容</label>
+                <textarea id="geojson-text" rows="7" spellcheck="false"
+                  placeholder='粘贴 WGS84 Polygon、MultiPolygon、Feature 或单研究区 FeatureCollection'></textarea>
+              </div>
+
+              <div id="registered-input-group" hidden>
+                <label for="registered-aoi">已登记研究区</label>
+                <select id="registered-aoi">
+                  <option value="">请从服务端登记列表选择</option>
+                </select>
+                <p id="registered-aoi-note" class="field-note">只有包含几何的登记项才能用于检索。</p>
+              </div>
+
+              <div id="aoi-summary" class="aoi-summary" hidden>
+                <svg id="aoi-preview" viewBox="0 0 180 100" role="img" aria-label="研究区边界示意">
+                  <path id="aoi-preview-path" d=""></path>
+                </svg>
+                <div>
+                  <strong id="aoi-summary-title">GeoJSON 已读取</strong>
+                  <p id="aoi-summary-text"></p>
+                  <p class="field-note">此处仅做格式预览；面积、有效性和坐标范围由后端权威校验。</p>
+                </div>
+              </div>
+            </fieldset>
+
+            <div class="action-row">
+              <button id="create-task-button" class="button button-primary" type="submit">开始检索</button>
+              <button id="update-request-button" class="button button-secondary" type="button" hidden>更新条件并继续</button>
+            </div>
+            <p class="consent-note">开始检索会读取目录元数据、质量层并缓存少量预览；确认前不会请求正式多波段下载。</p>
+          </form>
+        </section>
+
+        <section class="panel" aria-labelledby="approval-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="step-label">04 · 用户审批</p>
+              <h2 id="approval-heading">下载计划</h2>
+            </div>
+            <span id="plan-version-badge" class="status-pill status-neutral">尚无计划</span>
+          </div>
+
+          <div id="no-plan-message" class="empty-state compact">候选分析完成后，这里会出现待确认清单。</div>
+          <div id="plan-content" hidden>
+            <dl id="plan-summary" class="key-values"></dl>
+
+            <label for="download-root">保存根目录</label>
+            <div class="inline-control">
+              <input id="download-root" type="text" autocomplete="off" spellcheck="false">
+              <button id="apply-plan-button" class="button button-secondary" type="button">更新计划</button>
+            </div>
+            <p class="field-note">目录位于运行 Python 后端的机器，不是浏览器所在设备。</p>
+            <div class="resolved-path">
+              <span>解析后的任务目录</span>
+              <code id="resolved-task-path">等待服务端解析</code>
+            </div>
+
+            <div class="plan-edit-grid">
+              <div>
+                <label for="grid-meters">共享网格（米）</label>
+                <input id="grid-meters" type="number" min="10" step="10" value="20">
+              </div>
+              <div>
+                <label for="bands-input">光学波段（逗号分隔）</label>
+                <input id="bands-input" type="text" value="B2,B3,B4,B8,B11,B12">
+              </div>
+            </div>
+
+            <fieldset class="download-files-fieldset">
+              <legend>正式下载文件</legend>
+              <div id="plan-file-list" class="file-check-list"></div>
+            </fieldset>
+
+            <div id="plan-diff" class="plan-diff" hidden></div>
+
+            <label class="approval-check">
+              <input id="approval-check" type="checkbox">
+              我确认当前版本、影像清单、波段、网格和输出目录。
+            </label>
+            <div class="action-row">
+              <button id="approve-button" class="button button-danger" type="button" disabled>确认并开始下载</button>
+              <button id="cancel-button" class="button button-ghost" type="button" disabled>取消任务</button>
+              <button id="resume-button" class="button button-secondary" type="button" hidden>恢复未完成下载</button>
+            </div>
+            <p id="approval-warning" class="warning-text">修改目录、影像、波段或网格会生成新计划，并要求重新确认。</p>
+          </div>
+        </section>
+      </aside>
+
+      <div class="main-column">
+        <section class="panel" aria-labelledby="task-card-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="step-label">02 · 模型拆解</p>
+              <h2 id="task-card-heading">任务卡</h2>
+            </div>
+            <div class="task-identity">
+              <span id="task-status-badge" class="status-pill status-neutral">尚未创建</span>
+              <code id="task-id-label">—</code>
+            </div>
+          </div>
+          <div id="task-empty" class="empty-state">提交任务后，这里会展示模型拆解结果、程序校验后的时间窗口和研究区。</div>
+          <div id="task-card" hidden>
+            <dl id="task-fields" class="task-fields"></dl>
+            <div id="task-warnings" class="warning-list"></div>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="candidate-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="step-label">03 · 候选与质量</p>
+              <h2 id="candidate-heading">影像候选</h2>
+            </div>
+            <button id="refresh-button" class="button button-ghost button-small" type="button" disabled>刷新</button>
+          </div>
+
+          <div class="quality-legend" aria-label="质量指标说明">
+            <span><i class="legend-swatch clear"></i>研究区清晰比例</span>
+            <span><i class="legend-swatch valid"></i>有效覆盖比例</span>
+            <span><i class="legend-swatch unknown"></i>质量未知</span>
+          </div>
+
+          <div id="candidate-empty" class="empty-state">光学候选会先出现；只有在授权窗口内确有需要时才检索 SAR。</div>
+          <div id="candidate-content" hidden>
+            <div class="candidate-section-heading">
+              <h3>Sentinel-2 光学候选</h3>
+              <span id="optical-subset-note" class="field-note"></span>
+            </div>
+            <div id="optical-candidates" class="candidate-grid"></div>
+
+            <div class="recommendation-card">
+              <div>
+                <p class="eyebrow">模型建议 · 经程序校验</p>
+                <h3 id="recommendation-title">等待候选分析</h3>
+              </div>
+              <p id="recommendation-reason"></p>
+              <div id="recommendation-gaps" class="tag-list"></div>
+            </div>
+
+            <div id="sar-section" hidden>
+              <div class="candidate-section-heading">
+                <h3>Sentinel-1 SAR 候选</h3>
+                <span class="field-note">灰度后向散射预览，不是真彩色。</span>
+              </div>
+              <div id="sar-candidates" class="candidate-grid"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="progress-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="step-label">05 · 传输与验证</p>
+              <h2 id="progress-heading">逐文件进度</h2>
+            </div>
+            <span id="download-summary" class="field-note">等待用户确认</span>
+          </div>
+          <div id="download-empty" class="empty-state compact">正式下载开始后显示远端生成、已接收字节、速率和校验结果。</div>
+          <div id="download-files" class="download-file-list"></div>
+          <div id="result-artifacts" class="artifact-links"></div>
+        </section>
+
+        <section class="panel timeline-panel" aria-labelledby="timeline-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="step-label">全过程可审计</p>
+              <h2 id="timeline-heading">实时事件与模型调用</h2>
+            </div>
+            <div class="timeline-controls">
+              <label><input id="auto-follow" type="checkbox" checked> 自动跟随</label>
+              <button id="reconnect-button" class="button button-ghost button-small" type="button" disabled>重新连接</button>
+            </div>
+          </div>
+
+          <div class="audit-note">
+            展示应用实际发送的脱敏 messages、结构要求、候选和参数，以及模型实际返回、校验与动作接受结果；不展示或伪造模型内部思维。
+          </div>
+
+          <div class="log-tabs" role="tablist" aria-label="日志类型">
+            <button id="llm-tab" class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="llm-calls">模型调用</button>
+            <button id="events-tab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="event-timeline">全部事件</button>
+          </div>
+
+          <div id="llm-calls" class="llm-call-list" role="tabpanel" aria-labelledby="llm-tab">
+            <div class="empty-state compact">尚无模型调用。</div>
+          </div>
+          <ol id="event-timeline" class="event-timeline" role="tabpanel" aria-labelledby="events-tab" hidden></ol>
+        </section>
+      </div>
+    </main>
+
+    <footer class="app-footer">
+      <span>本页面只准备影像，不执行去云、变化检测、灾害或政策原因分析。</span>
+      <span id="footer-config-note">默认使用离线 mock；真实服务必须显式配置。</span>
+    </footer>
+  </body>
+</html>

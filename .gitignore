@@ -5,5 +5,5 @@ __pycache__/
 .venv/
 .env
 outputs/
+data/downloads/
 *.egg-info/
-

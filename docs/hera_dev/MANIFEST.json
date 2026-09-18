@@ -1,0 +1,63 @@
+{
+  "package": "MyAgent HERA-Change development and Codex migration pack",
+  "date": "2026-09-17",
+  "repository": "https://github.com/zhengay2320/MyAgent",
+  "reviewed_commit": "29d7633909cea282b442ad203398e92456cb6e47",
+  "review_method": "Read-only static inspection of selected repository files and provided research document",
+  "repository_modified": false,
+  "repository_tests_executed": false,
+  "paid_llm_calls_made": false,
+  "source_docx_sha256": "1a73a5c11854719468d4ab7bb7001bc21108b267864633fc95c75ecf27dd8f37",
+  "files": [
+    {
+      "name": "ACCEPTANCE_MATRIX.md",
+      "bytes": 6045,
+      "sha256": "ee8aef1a9372186e0bec3c6e557bea7f11a467834e3ef3285a9c01568c026ba8"
+    },
+    {
+      "name": "CODEX_00_BASELINE.md",
+      "bytes": 3818,
+      "sha256": "5e412bec7af4cd401bc43b2da15eb7798225de32a80382929884b28a00b89c7a"
+    },
+    {
+      "name": "CODEX_01_SCIENTIFIC_LOOP.md",
+      "bytes": 10367,
+      "sha256": "0db8bd2b7658f4b33073ffc62a79ad70408b23ba089482c2dbd486a25d7428a0"
+    },
+    {
+      "name": "CODEX_02_LLM_AND_EXPERIMENTS.md",
+      "bytes": 5656,
+      "sha256": "d05ea182db5ce7139e0d14c472bc7eede1a93bf74dbc98e2c2fee88afe37b492"
+    },
+    {
+      "name": "CODEX_03_EVALUATION.md",
+      "bytes": 5330,
+      "sha256": "61816e9accac7525830d098a3ce97cf8f3978e79215010936855270650ce33c7"
+    },
+    {
+      "name": "CODEX_04_REAL_DATA_AND_RISK.md",
+      "bytes": 5165,
+      "sha256": "88ba1d9e0286793c375024e099954f46778e58a32df61c56fe5615e9268d99e7"
+    },
+    {
+      "name": "CODEX_GLOBAL_GUARDRAILS.md",
+      "bytes": 5330,
+      "sha256": "0780a453e9bfefa01c43254c0de7e54a5794512f4091fefaed7cced3c1e76dc0"
+    },
+    {
+      "name": "DEVELOPMENT_PLAN.md",
+      "bytes": 15477,
+      "sha256": "686bd25402620ee62e3ebc1836a91bd9db440469db960c6638156c54d1f1f39a"
+    },
+    {
+      "name": "REPO_AUDIT.md",
+      "bytes": 7346,
+      "sha256": "f3e753957f3ad1572da2bfd44db90e652fd3ece93936380e1cb0ffa842b8f122"
+    },
+    {
+      "name": "START_HERE.md",
+      "bytes": 3668,
+      "sha256": "f06fb87c00fc9e347a0c3df7cfd9fce7256546d9bf83caf04b9be12039766ecf"
+    }
+  ]
+}

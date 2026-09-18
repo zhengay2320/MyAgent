@@ -19,5 +19,24 @@
     "geometry_ref": "synthetic://large-demo-grid",
     "is_synthetic": true,
     "description": "用于面积超限测试的合成元数据"
+  },
+  "wuhan_sample_plot_wgs84": {
+    "name": "武汉示例研究方框（非行政边界）",
+    "area_km2": 54.2,
+    "geometry_ref": "embedded://wuhan-sample-plot-v1",
+    "is_synthetic": false,
+    "description": "具备明确WGS84几何的固定研究方框；不是武汉行政边界，用户选择即表示授权该范围",
+    "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [114.28, 30.50],
+          [114.36, 30.50],
+          [114.36, 30.57],
+          [114.28, 30.57],
+          [114.28, 30.50]
+        ]
+      ]
+    }
   }
 }

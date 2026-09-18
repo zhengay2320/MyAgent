@@ -1,0 +1,105 @@
+{
+  "episodes": {
+    "EP001": {
+      "public": {
+        "analysis_cutoff": "2026-03-01T00:00:00Z",
+        "allowed_reference_windows": ["same_season", "adjacent_month"],
+        "persistence_horizon_days": 90,
+        "spatial_support": "synthetic-cell-a",
+        "events": [{
+          "event_id": "EV001",
+          "geometry_ref": "synthetic://cell-a/event-1",
+          "area_km2": 4.0,
+          "candidate_source": "mock_cross_month_detector",
+          "context_summary": "跨月份差异候选，需要同季节对照检查。",
+          "quality_flags": ["cross_month_comparison"],
+          "candidate_effect": 0.62,
+          "candidate_coverage": 0.90,
+          "candidate_root_source_ids": ["A_BASE", "A_TARGET"]
+        }],
+        "observations": [
+          {"observation_id":"A_BASE","sensor":"S2-mock","acquired_at":"2024-09-15T00:00:00Z","available_at":"2024-09-16T00:00:00Z","product_version":"v1","spatial_support":"synthetic-cell-a","window_id":"baseline","source_group_id":"raw_optical","measurement_value":0.20,"quality":0.95,"coverage":0.90,"unit":"index"},
+          {"observation_id":"A_TARGET","sensor":"S2-mock","acquired_at":"2025-10-15T00:00:00Z","available_at":"2025-10-16T00:00:00Z","product_version":"v1","spatial_support":"synthetic-cell-a","window_id":"target","source_group_id":"raw_optical","measurement_value":0.82,"quality":0.94,"coverage":0.90,"unit":"index"},
+          {"observation_id":"A_CONTROL","sensor":"S2-mock","acquired_at":"2024-10-15T00:00:00Z","available_at":"2024-10-16T00:00:00Z","product_version":"v1","spatial_support":"synthetic-cell-a","window_id":"same_season","source_group_id":"raw_optical","measurement_value":0.76,"quality":0.93,"coverage":0.88,"unit":"index"}
+        ]
+      },
+      "private_evaluation": {"event_class":"transient_change","known_interference":["season"]}
+    },
+    "EP002": {
+      "public": {
+        "analysis_cutoff": "2026-03-01T00:00:00Z",
+        "allowed_reference_windows": ["same_season"],
+        "persistence_horizon_days": 90,
+        "spatial_support": "synthetic-cell-b",
+        "events": [{
+          "event_id": "EV001",
+          "geometry_ref": "synthetic://cell-b/event-1",
+          "area_km2": 3.5,
+          "candidate_source": "mock_reconstruction_detector",
+          "context_summary": "恢复产物给出强差异，需要原始观测对照。",
+          "quality_flags": ["reconstruction_derived"],
+          "candidate_effect": 0.65,
+          "candidate_coverage": 0.86,
+          "candidate_root_source_ids": ["B_BASE", "B_TARGET"]
+        }],
+        "observations": [
+          {"observation_id":"B_BASE","sensor":"S2-mock","acquired_at":"2024-09-10T00:00:00Z","available_at":"2024-09-11T00:00:00Z","product_version":"v1","spatial_support":"synthetic-cell-b","window_id":"baseline","source_group_id":"raw_optical","measurement_value":0.30,"quality":0.92,"coverage":0.86,"unit":"index"},
+          {"observation_id":"B_TARGET","sensor":"S2-mock","acquired_at":"2025-10-10T00:00:00Z","available_at":"2025-10-11T00:00:00Z","product_version":"v1","spatial_support":"synthetic-cell-b","window_id":"target","source_group_id":"raw_optical","measurement_value":0.34,"quality":0.91,"coverage":0.86,"unit":"index"}
+        ]
+      },
+      "private_evaluation": {"event_class":"stable","known_interference":["reconstruction"]}
+    },
+    "EP003": {
+      "public": {
+        "analysis_cutoff": "2026-03-01T00:00:00Z",
+        "allowed_reference_windows": ["same_season"],
+        "persistence_horizon_days": 90,
+        "spatial_support": "synthetic-cell-c",
+        "events": [{
+          "event_id": "EV001",
+          "geometry_ref": "synthetic://cell-c/event-1",
+          "area_km2": 5.0,
+          "candidate_source": "mock_multitemporal_detector",
+          "context_summary": "多期原始观测可用于持续性检查。",
+          "quality_flags": ["multi_temporal_available"],
+          "candidate_effect": 0.60,
+          "candidate_coverage": 0.91,
+          "candidate_root_source_ids": ["C_BASE", "C_TARGET"]
+        }],
+        "observations": [
+          {"observation_id":"C_BASE","sensor":"S2-mock","acquired_at":"2024-09-12T00:00:00Z","available_at":"2024-09-13T00:00:00Z","product_version":"v1","spatial_support":"synthetic-cell-c","window_id":"baseline","source_group_id":"raw_optical","measurement_value":0.20,"quality":0.95,"coverage":0.91,"unit":"index"},
+          {"observation_id":"C_TARGET","sensor":"S2-mock","acquired_at":"2025-10-12T00:00:00Z","available_at":"2025-10-13T00:00:00Z","product_version":"v1","spatial_support":"synthetic-cell-c","window_id":"target","source_group_id":"raw_optical","measurement_value":0.80,"quality":0.94,"coverage":0.91,"unit":"index"},
+          {"observation_id":"C_FOLLOW_1","sensor":"S2-mock","acquired_at":"2025-12-15T00:00:00Z","available_at":"2025-12-16T00:00:00Z","product_version":"v1","spatial_support":"synthetic-cell-c","window_id":"followup","source_group_id":"raw_optical","measurement_value":0.78,"quality":0.93,"coverage":0.90,"unit":"index"},
+          {"observation_id":"C_FOLLOW_2","sensor":"S2-mock","acquired_at":"2026-02-15T00:00:00Z","available_at":"2026-02-16T00:00:00Z","product_version":"v1","spatial_support":"synthetic-cell-c","window_id":"followup","source_group_id":"raw_optical","measurement_value":0.81,"quality":0.92,"coverage":0.89,"unit":"index"}
+        ]
+      },
+      "private_evaluation": {"event_class":"persistent_change","known_interference":[]}
+    },
+    "EP004": {
+      "public": {
+        "analysis_cutoff": "2026-03-01T00:00:00Z",
+        "allowed_reference_windows": ["same_season"],
+        "persistence_horizon_days": 90,
+        "spatial_support": "synthetic-cell-d",
+        "events": [{
+          "event_id": "EV001",
+          "geometry_ref": "synthetic://cell-d/event-1",
+          "area_km2": 2.0,
+          "candidate_source": "mock_review_candidate",
+          "context_summary": "覆盖不足的审查候选。",
+          "quality_flags": ["low_coverage"],
+          "candidate_effect": null,
+          "candidate_coverage": 0.22,
+          "candidate_root_source_ids": ["D_BASE", "D_TARGET"]
+        }],
+        "observations": [
+          {"observation_id":"D_BASE","sensor":"S2-mock","acquired_at":"2024-09-12T00:00:00Z","available_at":"2024-09-13T00:00:00Z","product_version":"v1","spatial_support":"synthetic-cell-d","window_id":"baseline","source_group_id":"raw_optical","measurement_value":0.20,"quality":0.40,"coverage":0.22,"unit":"index"},
+          {"observation_id":"D_TARGET","sensor":"S2-mock","acquired_at":"2025-10-12T00:00:00Z","available_at":"2025-10-13T00:00:00Z","product_version":"v1","spatial_support":"synthetic-cell-d","window_id":"target","source_group_id":"raw_optical","measurement_value":0.75,"quality":0.42,"coverage":0.25,"unit":"index"},
+          {"observation_id":"D_CONTROL","sensor":"S2-mock","acquired_at":"2024-10-12T00:00:00Z","available_at":"2024-10-13T00:00:00Z","product_version":"v1","spatial_support":"synthetic-cell-d","window_id":"same_season","source_group_id":"raw_optical","measurement_value":0.70,"quality":0.38,"coverage":0.20,"unit":"index"},
+          {"observation_id":"D_FOLLOW","sensor":"S2-mock","acquired_at":"2026-02-12T00:00:00Z","available_at":"2026-02-13T00:00:00Z","product_version":"v1","spatial_support":"synthetic-cell-d","window_id":"followup","source_group_id":"raw_optical","measurement_value":0.72,"quality":0.35,"coverage":0.20,"unit":"index"}
+        ]
+      },
+      "private_evaluation": {"event_class":"transient_change","known_interference":["unknown"]}
+    }
+  }
+}

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import re
+from collections.abc import Callable
 from typing import Any, Generic, Protocol, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -8,6 +11,35 @@ from eo_agent.schemas import ActionSpec, ReportFacts, TaskDraft
 
 T = TypeVar("T")
 S = TypeVar("S", bound=BaseModel)
+StructuredObserver = Callable[[str, dict[str, Any]], None]
+
+
+def build_structured_messages(
+    purpose: str, visible_input: dict[str, Any], schema: type[BaseModel]
+) -> list[dict[str, str]]:
+    prompt = (
+        "完成指定的受约束应用步骤。只能使用 visible_input 中提供的数据；不得编造候选 ID、"
+        "数值、时间、几何、路径或未来结果。仅输出符合 JSON Schema 的完整 JSON。"
+        f"\npurpose={purpose}"
+        f"\nSchema={json.dumps(schema.model_json_schema(), ensure_ascii=False)}"
+        f"\nvisible_input={json.dumps(visible_input, ensure_ascii=False, default=str)}"
+    )
+    return [{"role": "user", "content": prompt}]
+
+
+def redact_for_log(value: Any) -> Any:
+    """Redact secrets and query strings without altering the request actually sent."""
+    sensitive = re.compile(r"(authorization|api[_-]?key|cookie|token|signature)", re.I)
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if sensitive.search(str(key)) else redact_for_log(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_for_log(item) for item in value]
+    if isinstance(value, str) and re.match(r"^https?://", value):
+        return value.split("?", 1)[0] + ("?[REDACTED]" if "?" in value else "")
+    return value
 
 
 class LLMMetadata(BaseModel):
@@ -62,5 +94,9 @@ class LLMClient(Protocol):
     def summarize(self, facts: ReportFacts) -> LLMResult[str]: ...
 
     def generate_structured(
-        self, purpose: str, visible_input: dict[str, Any], schema: type[S]
+        self,
+        purpose: str,
+        visible_input: dict[str, Any],
+        schema: type[S],
+        observer: StructuredObserver | None = None,
     ) -> LLMResult[S]: ...

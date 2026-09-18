@@ -8,7 +8,14 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from eo_agent.config import ModelProfile
-from eo_agent.llm.base import LLMAttemptBudget, LLMMetadata, LLMResult
+from eo_agent.llm.base import (
+    LLMAttemptBudget,
+    LLMMetadata,
+    LLMResult,
+    StructuredObserver,
+    build_structured_messages,
+    redact_for_log,
+)
 from eo_agent.schemas import ActionSpec, ReportFacts, TaskDraft
 
 T = TypeVar("T", bound=BaseModel)
@@ -42,7 +49,14 @@ class OpenAICompatibleAdapter:
             return base
         return f"{base}/chat/completions"
 
-    def _invoke(self, messages: list[dict[str, str]], schema: type[T]) -> LLMResult[T]:
+    def _invoke(
+        self,
+        messages: list[dict[str, str]],
+        schema: type[T],
+        *,
+        observer: StructuredObserver | None = None,
+        purpose: str = "legacy",
+    ) -> LLMResult[T]:
         started = perf_counter()
         repairs = 0
         retries = 0
@@ -58,6 +72,19 @@ class OpenAICompatibleAdapter:
                 payload["response_format"] = {"type": "json_object"}
             self.attempt_budget.reserve()
             attempts += 1
+            if observer:
+                observer(
+                    "request",
+                    redact_for_log(
+                        {
+                            "purpose": purpose,
+                            "attempt": attempts,
+                            "endpoint": self.endpoint,
+                            "payload": payload,
+                            "schema": schema.model_json_schema(),
+                        }
+                    ),
+                )
             try:
                 response = self.client.post(
                     self.endpoint,
@@ -65,24 +92,98 @@ class OpenAICompatibleAdapter:
                     json=payload,
                 )
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                if observer:
+                    observer(
+                        "error",
+                        {
+                            "purpose": purpose,
+                            "attempt": attempts,
+                            "error_type": type(exc).__name__,
+                            "message": "网络调用失败",
+                        },
+                    )
                 if retries >= self.max_network_retries:
                     raise LLMProviderError(f"兼容模型网络调用失败: {type(exc).__name__}") from exc
                 retries += 1
                 continue
             if response.status_code in {401, 403}:
+                if observer:
+                    observer(
+                        "error",
+                        {
+                            "purpose": purpose,
+                            "attempt": attempts,
+                            "http_status": response.status_code,
+                            "message": "鉴权或权限失败",
+                        },
+                    )
                 raise LLMProviderError(f"兼容模型鉴权/权限失败: HTTP {response.status_code}")
-            if response.status_code >= 500 and retries < self.max_network_retries:
-                retries += 1
-                continue
+            if response.status_code == 429 or response.status_code >= 500:
+                if observer:
+                    observer(
+                        "error",
+                        {
+                            "purpose": purpose,
+                            "attempt": attempts,
+                            "http_status": response.status_code,
+                            "message": (
+                                "限流或临时服务错误，将在预算内重试"
+                                if retries < self.max_network_retries
+                                else "限流或临时服务错误，重试上限已用尽"
+                            ),
+                        },
+                    )
+                if retries < self.max_network_retries:
+                    retries += 1
+                    continue
+                raise LLMProviderError(
+                    f"兼容模型临时服务错误: HTTP {response.status_code}"
+                )
+            if response.status_code >= 400:
+                if observer:
+                    observer(
+                        "error",
+                        {
+                            "purpose": purpose,
+                            "attempt": attempts,
+                            "http_status": response.status_code,
+                            "message": "兼容模型请求被拒绝",
+                        },
+                    )
+                raise LLMProviderError(f"兼容模型请求失败: HTTP {response.status_code}")
             try:
-                response.raise_for_status()
                 body = response.json()
                 content = body["choices"][0]["message"]["content"]
+                if observer:
+                    observer(
+                        "response",
+                        redact_for_log(
+                            {
+                                "purpose": purpose,
+                                "attempt": attempts,
+                                "http_status": response.status_code,
+                                "content": content,
+                                "finish_reason": body["choices"][0].get("finish_reason"),
+                                "returned_model": body.get("model"),
+                                "usage": body.get("usage"),
+                            }
+                        ),
+                    )
                 if not content or not str(content).strip():
                     raise ValueError("空响应")
                 value = schema.model_validate(json.loads(content))
             except (KeyError, IndexError, json.JSONDecodeError, ValidationError, ValueError) as exc:
                 error = str(exc)
+                if observer:
+                    observer(
+                        "validation",
+                        {
+                            "purpose": purpose,
+                            "attempt": attempts,
+                            "valid": False,
+                            "error": error,
+                        },
+                    )
                 if repairs >= self.max_schema_repairs:
                     raise LLMProviderError(f"兼容模型结构化输出无效: {error}") from exc
                 repairs += 1
@@ -95,6 +196,16 @@ class OpenAICompatibleAdapter:
                     },
                 ]
                 continue
+            if observer:
+                observer(
+                    "validation",
+                    {
+                        "purpose": purpose,
+                        "attempt": attempts,
+                        "valid": True,
+                        "parsed": value.model_dump(mode="json"),
+                    },
+                )
             usage_raw = body.get("usage")
             usage = None
             if isinstance(usage_raw, dict):
@@ -131,17 +242,19 @@ class OpenAICompatibleAdapter:
         return self._invoke([{"role": "user", "content": prompt}], TaskDraft)
 
     def generate_structured(
-        self, purpose: str, visible_input: dict[str, Any], schema: type[T]
+        self,
+        purpose: str,
+        visible_input: dict[str, Any],
+        schema: type[T],
+        observer: StructuredObserver | None = None,
     ) -> LLMResult[T]:
         """Generic structured entry point; callers must pass a pre-built safe view."""
-        prompt = (
-            "完成指定科学调查步骤。只能使用 visible_input，不得猜测隐藏标签、未来结果、"
-            "任意路径或代码。仅输出符合 JSON Schema 的 JSON。"
-            f"\npurpose={purpose}"
-            f"\nSchema={json.dumps(schema.model_json_schema(), ensure_ascii=False)}"
-            f"\nvisible_input={json.dumps(visible_input, ensure_ascii=False, default=str)}"
+        return self._invoke(
+            build_structured_messages(purpose, visible_input, schema),
+            schema,
+            observer=observer,
+            purpose=purpose,
         )
-        return self._invoke([{"role": "user", "content": prompt}], schema)
 
     def choose_action(
         self, visible_state: dict[str, Any], allowed_actions: list[str]
