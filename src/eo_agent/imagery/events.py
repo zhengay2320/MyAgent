@@ -5,6 +5,7 @@ import threading
 from collections.abc import Iterator
 from time import monotonic
 
+from eo_agent.audit import AuditLogger
 from eo_agent.imagery.repository import ImageryRepository
 
 TERMINAL_STATES = {"COMPLETED", "PARTIAL", "FAILED", "CANCELLED"}
@@ -13,12 +14,23 @@ TERMINAL_STATES = {"COMPLETED", "PARTIAL", "FAILED", "CANCELLED"}
 class EventBroker:
     """Persistent event log with in-process wakeups; SQLite remains authoritative."""
 
-    def __init__(self, repository: ImageryRepository) -> None:
+    def __init__(
+        self, repository: ImageryRepository, audit_logger: AuditLogger | None = None
+    ) -> None:
         self.repository = repository
+        self.audit_logger = audit_logger
         self._condition = threading.Condition()
 
     def emit(self, task_id: str, **event) -> dict:
         value = self.repository.append_event(task_id, **event)
+        if self.audit_logger is not None:
+            self.audit_logger.record(
+                "imagery.event",
+                task_id=task_id,
+                stage=value["stage"],
+                message=value["summary"],
+                data=value,
+            )
         with self._condition:
             self._condition.notify_all()
         return value

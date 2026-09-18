@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
+from eo_agent.audit import AuditLogger
 from eo_agent.config import load_settings
 from eo_agent.llm.base import LLMClient
 from eo_agent.llm.factory import create_llm
@@ -37,10 +38,17 @@ class TaskService:
     ) -> None:
         self.output_root = Path(output_root).resolve()
         self.output_root.mkdir(parents=True, exist_ok=True)
+        self.audit = AuditLogger(self.output_root / "log.txt")
         self.repository = TaskRepository(self.output_root / "tasks.sqlite3")
         self.registry = registry or create_default_registry()
         self.scientific_llm = scientific_llm
         self.scientific_environment = scientific_environment
+        self.audit.record(
+            "runtime.logging_ready",
+            stage="task_service",
+            message="任务服务审计日志已启用",
+            data={"log_path": str(self.audit.path)},
+        )
 
     def run(self, request: TaskRequest) -> TaskRunResult:
         settings = load_settings(request.model_profile)  # 读取配置
@@ -50,6 +58,13 @@ class TaskService:
         ):
             raise ValueError(f"未知场景: {request.scenario}")
         task_id = uuid4().hex
+        self.audit.record(
+            "user.request",
+            task_id=task_id,
+            stage="created",
+            message="收到用户任务请求",
+            data=request.model_dump(mode="json"),
+        )
         artifacts = ArtifactStore(self.output_root, task_id)
         self.repository.create_task(
             task_id,
@@ -92,13 +107,20 @@ class TaskService:
         report_html_path: str | None = None
         report_json_path: str | None = None
         try:
-            graph = build_graph(settings, create_llm(settings), executor)
+            graph = build_graph(settings, create_llm(settings), executor, self.audit)
             state = graph.invoke(
                 state, config={"recursion_limit": settings.budgets.recursion_limit}
             )
         except Exception as exc:  # terminal persistence is intentional
             state["status"] = TaskStatus.FAILED
             state["error"] = f"{type(exc).__name__}: {exc}"
+            self.audit.record(
+                "task.failed",
+                task_id=task_id,
+                stage=state["stage"],
+                message="任务执行失败",
+                data={"error_type": type(exc).__name__, "error": str(exc)},
+            )
 
         all_artifacts.extend(item for result in state["tool_results"] for item in result.artifacts)
         task_ref = artifacts.write_json(
@@ -169,6 +191,19 @@ class TaskService:
             state["error"],
             all_artifacts,
         )
+        self.audit.record(
+            "task.completed",
+            task_id=task_id,
+            stage=state["stage"],
+            message="任务执行结束并完成持久化",
+            data={
+                "status": result.status,
+                "steps": result.steps,
+                "report_html": result.report_html,
+                "report_json": result.report_json,
+                "error": result.error,
+            },
+        )
         return result
 
     def _run_scientific(self, task_id, request, settings, artifacts) -> TaskRunResult:
@@ -178,6 +213,7 @@ class TaskService:
                 settings,
                 self.scientific_llm or create_llm(settings),
                 environment=self.scientific_environment,
+                audit_logger=self.audit,
             ).run(task_id, request, artifacts)
             all_artifacts = output.artifacts
             result = TaskRunResult(
@@ -211,6 +247,13 @@ class TaskService:
                 report_json=None,
                 error=error,
             )
+            self.audit.record(
+                "task.failed",
+                task_id=task_id,
+                stage="scientific",
+                message="科学调查任务执行失败",
+                data={"error_type": type(exc).__name__, "error": str(exc)},
+            )
         self.repository.finish_task(
             task_id,
             result.status,
@@ -220,6 +263,13 @@ class TaskService:
             result.report_json,
             result.error,
             all_artifacts,
+        )
+        self.audit.record(
+            "task.completed",
+            task_id=task_id,
+            stage="scientific",
+            message="科学调查任务执行结束并完成持久化",
+            data=result.model_dump(mode="json"),
         )
         return result
 

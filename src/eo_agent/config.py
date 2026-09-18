@@ -51,6 +51,7 @@ class ModelProfile(BaseModel):
     base_url: str | None = None
     prompt_version: str = "eo-v0.1"
     json_response_format: bool = False
+    request_timeout_seconds: float = Field(default=60.0, ge=5.0, le=300.0)
     generation_params: dict[str, Any] = Field(default_factory=dict)
 
     def sanitized(self) -> dict[str, Any]:

@@ -4,6 +4,7 @@ from datetime import date
 from time import perf_counter
 from typing import Any
 
+from eo_agent.audit import AuditLogger
 from eo_agent.config import Settings
 from eo_agent.llm.base import LLMClient, LLMResult
 from eo_agent.reports.facts import build_report_facts
@@ -35,10 +36,17 @@ def _month_window(value: str) -> TimeWindow:
 
 
 class WorkflowNodes:
-    def __init__(self, settings: Settings, llm: LLMClient, executor: ToolExecutor) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        llm: LLMClient,
+        executor: ToolExecutor,
+        audit_logger: AuditLogger | None = None,
+    ) -> None:
         self.settings = settings
         self.llm = llm
         self.executor = executor
+        self.audit_logger = audit_logger
 
     def _trace(
         self,
@@ -52,8 +60,7 @@ class WorkflowNodes:
         error: str | None = None,
         usage: dict[str, int | None] | None = None,
     ) -> None:
-        state["trace"].append(
-            TraceEvent(
+        event = TraceEvent(
                 sequence=len(state["trace"]) + 1,
                 task_id=state["task_id"],
                 stage=stage,
@@ -66,7 +73,15 @@ class WorkflowNodes:
                 error=error,
                 usage=usage,
             )
-        )
+        state["trace"].append(event)
+        if self.audit_logger is not None:
+            self.audit_logger.record(
+                "workflow.event",
+                task_id=state["task_id"],
+                stage=stage,
+                message=event_type,
+                data=event.model_dump(mode="json"),
+            )
 
     def _record_llm(self, state: WorkflowState, stage: str, result: LLMResult[Any]) -> None:
         state["llm_call_count"] += result.metadata.attempts
@@ -87,6 +102,26 @@ class WorkflowNodes:
             error=result.metadata.error,
             usage=result.metadata.usage,
         )
+        if self.audit_logger is not None:
+            self.audit_logger.record(
+                "llm.output",
+                task_id=state["task_id"],
+                stage=stage,
+                message="大模型返回并完成结构校验",
+                data={"payload": result.payload, "metadata": result.metadata},
+            )
+
+    def _record_llm_input(
+        self, state: WorkflowState, stage: str, purpose: str, data: dict[str, Any]
+    ) -> None:
+        if self.audit_logger is not None:
+            self.audit_logger.record(
+                "llm.input",
+                task_id=state["task_id"],
+                stage=stage,
+                message=purpose,
+                data=data,
+            )
 
     def _check_llm_budget(self, state: WorkflowState) -> None:
         if state["llm_call_count"] >= self.settings.budgets.max_llm_calls:
@@ -95,6 +130,12 @@ class WorkflowNodes:
     def parse(self, state: WorkflowState) -> WorkflowState:
         state["stage"] = "parse"
         self._check_llm_budget(state)
+        self._record_llm_input(
+            state,
+            "parse",
+            "解析用户请求为两时期任务草案",
+            {"query": state["request"].query, "aoi_id": state["request"].aoi_id},
+        )
         result = self.llm.parse_task(state["request"].query, state["request"].aoi_id)
         self._record_llm(state, "parse", result)
         state["draft"] = result.payload
@@ -170,6 +211,19 @@ class WorkflowNodes:
                         )
                         state["status"] = TaskStatus.RUNNING
         state["error"] = error
+        if self.audit_logger is not None:
+            self.audit_logger.record(
+                "task.decomposed",
+                task_id=state["task_id"],
+                stage="validate",
+                message="任务草案与程序校验结果",
+                data={
+                    "draft": draft,
+                    "validated_task": state["task"],
+                    "status": state["status"],
+                    "error": error,
+                },
+            )
         state["steps"].append("validate: 程序校验 AOI、月份、任务类型和预算")
         self._trace(
             state,
@@ -205,9 +259,25 @@ class WorkflowNodes:
         *,
         update_resource: bool = True,
     ) -> ToolResult:
+        if self.audit_logger is not None:
+            self.audit_logger.record(
+                "tool.input",
+                task_id=state["task_id"],
+                stage=stage,
+                message=f"调用工具 {name}",
+                data={"tool": name, "arguments": args},
+            )
         attempts = self.executor.execute(name, stage, args, self._context(state))
         for attempt in attempts:
             result = attempt.result
+            if self.audit_logger is not None:
+                self.audit_logger.record(
+                    "tool.output",
+                    task_id=state["task_id"],
+                    stage=stage,
+                    message=f"工具 {name} 返回",
+                    data={"duration_ms": attempt.duration_ms, "result": result},
+                )
             state["tool_results"].append(result)
             self._trace(
                 state,
@@ -269,6 +339,15 @@ class WorkflowNodes:
             "reconstruction_recommended": getattr(quality, "reconstruction_recommended", False),
         }
         self._check_llm_budget(state)
+        self._record_llm_input(
+            state,
+            "choose_reconstruction",
+            "根据质量指标选择是否执行去云",
+            {
+                "visible_state": visible,
+                "allowed_actions": ["reconstruct", "skip_reconstruction"],
+            },
+        )
         result = self.llm.choose_action(visible, ["reconstruct", "skip_reconstruction"])
         self._record_llm(state, "choose_reconstruction", result)
         state["scenario_state"]["chosen_reconstruction"] = int(
@@ -313,8 +392,18 @@ class WorkflowNodes:
         latest = state["tool_results"][-1].data
         assert isinstance(latest, VerificationData)
         self._check_llm_budget(state)
+        visible = {"verdict": latest.verdict, "evidence_round": latest.evidence_round}
+        self._record_llm_input(
+            state,
+            "evidence",
+            "根据当前核验结论决定是否补充证据",
+            {
+                "visible_state": visible,
+                "allowed_actions": ["fetch_additional_evidence", "keep_partial"],
+            },
+        )
         decision = self.llm.choose_action(
-            {"verdict": latest.verdict, "evidence_round": latest.evidence_round},
+            visible,
             ["fetch_additional_evidence", "keep_partial"],
         )
         self._record_llm(state, "evidence", decision)
@@ -342,6 +431,12 @@ class WorkflowNodes:
             state["status"] = TaskStatus.PARTIAL
         facts = build_report_facts(state)
         self._check_llm_budget(state)
+        self._record_llm_input(
+            state,
+            "report",
+            "根据结构化事实生成报告摘要",
+            {"facts": facts.model_dump(mode="json", exclude={"artifacts"})},
+        )
         result = self.llm.summarize(facts)
         self._record_llm(state, "report", result)
         facts.llm_call_count = state["llm_call_count"]

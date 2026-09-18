@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
+from eo_agent.audit import AuditLogger
 from eo_agent.config import Settings
 from eo_agent.llm.base import LLMClient
 from eo_agent.reports.scientific_renderer import ScientificReportRenderer
@@ -43,11 +44,13 @@ class ScientificEngine:
         *,
         environment: EpisodeEnvironment | None = None,
         registry: ExperimentRegistry | None = None,
+        audit_logger: AuditLogger | None = None,
     ) -> None:
         self.settings = settings
         self.llm = llm
         self.environment_override = environment
         self.registry = registry or ExperimentRegistry()
+        self.audit_logger = audit_logger
 
     def run(
         self, task_id: str, request: TaskRequest, artifacts: ArtifactStore
@@ -55,6 +58,17 @@ class ScientificEngine:
         assert request.episode_id is not None
         environment = self.environment_override or EpisodeEnvironment.load(request.episode_id)
         task = self._task_contract(task_id, request)
+        if self.audit_logger is not None:
+            self.audit_logger.record(
+                "task.decomposed",
+                task_id=task_id,
+                stage="scientific",
+                message="科学调查任务契约与用户条件已解析",
+                data={
+                    "request": request.model_dump(mode="json"),
+                    "task_contract": task.model_dump(mode="json"),
+                },
+            )
         budget = BudgetLedger(
             max_llm_calls=self.settings.scientific.max_llm_calls,
             max_experiments=self.settings.scientific.max_experiments,
@@ -145,6 +159,23 @@ class ScientificEngine:
                         state["decision"].model_dump(mode="json"),
                     )
                 save_jsonl("budget_ledger.jsonl", budget_history)
+                if self.audit_logger is not None:
+                    self.audit_logger.record(
+                        "scientific.snapshot",
+                        task_id=task_id,
+                        stage=stage,
+                        message=f"科学调查状态快照：{stage}",
+                        data={
+                            "event": state["event"],
+                            "hypotheses": state["hypotheses"],
+                            "proposed_experiment": state["proposed_experiment"],
+                            "precommitments": state["precommitments"],
+                            "results": state["results"],
+                            "revisions": state["revisions"],
+                            "decision": state.get("decision"),
+                            "budget": state["budget"],
+                        },
+                    )
 
             state: ScientificWorkflowState = {
                 "event": event,
@@ -166,7 +197,7 @@ class ScientificEngine:
                 "continue_investigation": False,
                 "trace": [],
             }
-            compiled = build_scientific_graph(self.llm, snapshot)
+            compiled = build_scientific_graph(self.llm, snapshot, self.audit_logger)
             state = compiled.invoke(
                 state, config={"recursion_limit": self.settings.budgets.recursion_limit}
             )
@@ -244,6 +275,19 @@ class ScientificEngine:
         save_json("effective_config.json", self.settings.effective_config())
         html_path = str(artifacts.resolve("report.html"))
         json_path = str(artifacts.resolve("report.json"))
+        if self.audit_logger is not None:
+            self.audit_logger.record(
+                "scientific.report_ready",
+                task_id=task_id,
+                stage="report",
+                message="事件级科学报告已生成",
+                data={
+                    "status": TaskStatus.COMPLETED,
+                    "report_html": html_path,
+                    "report_json": json_path,
+                    "budget": budget,
+                },
+            )
         return ScientificRunOutput(
             status=TaskStatus.COMPLETED,
             steps=[

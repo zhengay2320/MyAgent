@@ -9,7 +9,8 @@ from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 
-from eo_agent.llm.base import LLMClient, LLMResult
+from eo_agent.audit import AuditLogger
+from eo_agent.llm.base import LLMClient, LLMResult, build_structured_messages
 from eo_agent.scientific.context import build_agent_view
 from eo_agent.scientific.risk import HeuristicRiskAdapter
 from eo_agent.scientific.schemas import (
@@ -33,9 +34,15 @@ SnapshotCallback = Callable[[str, ScientificWorkflowState], None]
 
 
 class ScientificWorkflowNodes:
-    def __init__(self, llm: LLMClient, snapshot: SnapshotCallback) -> None:
+    def __init__(
+        self,
+        llm: LLMClient,
+        snapshot: SnapshotCallback,
+        audit_logger: AuditLogger | None = None,
+    ) -> None:
         self.llm = llm
         self.snapshot = snapshot
+        self.audit_logger = audit_logger
 
     def _view(self, state: ScientificWorkflowState) -> dict[str, Any]:
         view = build_agent_view(
@@ -58,7 +65,40 @@ class ScientificWorkflowNodes:
         schema: type[Any],
     ) -> LLMResult[Any]:
         state["budget"].reserve("llm")
-        result = self.llm.generate_structured(purpose, visible, schema)
+        task_id = state["investigation"].task.task_id
+        if self.audit_logger is not None:
+            self.audit_logger.record(
+                "llm.input",
+                task_id=task_id,
+                stage=purpose,
+                message="科学调查模型调用",
+                data={
+                    "purpose": purpose,
+                    "visible_input": visible,
+                    "schema": schema.model_json_schema(),
+                    "messages": build_structured_messages(purpose, visible, schema),
+                },
+            )
+        try:
+            result = self.llm.generate_structured(purpose, visible, schema)
+        except Exception as exc:
+            if self.audit_logger is not None:
+                self.audit_logger.record(
+                    "llm.failure",
+                    task_id=task_id,
+                    stage=purpose,
+                    message="科学调查模型调用失败",
+                    data={"error_type": type(exc).__name__, "error": str(exc)},
+                )
+            raise
+        if self.audit_logger is not None:
+            self.audit_logger.record(
+                "llm.output",
+                task_id=task_id,
+                stage=purpose,
+                message="科学调查模型返回并完成结构校验",
+                data={"payload": result.payload, "metadata": result.metadata},
+            )
         state["trace"].append(
             {
                 "sequence": len(state["trace"]) + 1,
@@ -329,8 +369,12 @@ class ScientificWorkflowNodes:
         return {"claim": claim, "budget": state["budget"]}
 
 
-def build_scientific_graph(llm: LLMClient, snapshot: SnapshotCallback):
-    nodes = ScientificWorkflowNodes(llm, snapshot)
+def build_scientific_graph(
+    llm: LLMClient,
+    snapshot: SnapshotCallback,
+    audit_logger: AuditLogger | None = None,
+):
+    nodes = ScientificWorkflowNodes(llm, snapshot, audit_logger)
     graph = StateGraph(ScientificWorkflowState)
     graph.add_node("propose_hypotheses", nodes.propose_hypotheses)
     graph.add_node("propose_experiment", nodes.propose_experiment)

@@ -137,6 +137,23 @@ python -m eo_agent imagery doctor --provider mock
 python -m eo_agent serve --host 127.0.0.1 --port 8000 --output-dir outputs/api
 ```
 
+### 终端与 `log.txt` 调试日志
+
+CLI、API、legacy、scientific 和交互式影像准备流程都会把中间执行信息同步输出到终端，
+并以 UTF-8 JSON Lines 追加保存到所选输出目录的 `log.txt`。例如上述服务使用：
+
+```text
+outputs/api/log.txt
+```
+
+日志包含用户提交的任务条件、任务拆解、输入模型的白名单数据与结构要求、模型实际返回、
+解析和业务校验、动作接受或拒绝、工具参数与结果、实验前承诺、科学调查修订、下载阶段事件
+以及最终状态。每行都是一个独立 JSON 对象，可按 `task_id`、`stage` 或 `event_type` 检索。
+
+日志不会记录模型不可见的内部思维过程；API Key、Authorization、Cookie、密码、Token、签名
+以及 URL 查询参数会在写入终端和文件前脱敏。`log.txt` 可能包含完整用户查询和 AOI GeoJSON，
+仅应用于本地调试，不应提交到版本库或发送给无权访问研究数据的人员。
+
 页面支持粘贴/上传 WGS84 Polygon/MultiPolygon，或选择内置的
 `wuhan_sample_plot_wgs84` 固定研究方框（不是武汉行政边界）。模糊地名不会被自动变成边界。
 搜索和小型预览不等于正式下载：流程必须停在 `WAITING_DOWNLOAD_APPROVAL`，只有用户确认当前

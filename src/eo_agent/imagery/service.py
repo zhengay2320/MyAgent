@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import httpx
 
+from eo_agent.audit import AuditLogger
 from eo_agent.config import PROJECT_ROOT, load_settings
 from eo_agent.imagery.aoi import AOIValidationError, geometry_as_geojson, normalize_geojson
 from eo_agent.imagery.artifacts import ImageryArtifactStore
@@ -77,8 +78,9 @@ class ImageryTaskService:
         self.control_root = self.output_dir / "imagery"
         self.control_root.mkdir(parents=True, exist_ok=True)
         self.config = config or load_imagery_config(self.project_root)
+        self.audit = AuditLogger(self.output_dir / "log.txt")
         self.repository = ImageryRepository(self.output_dir / "imagery.sqlite3")
-        self.events = EventBroker(self.repository)
+        self.events = EventBroker(self.repository, self.audit)
         self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="imagery")
         self._futures: dict[str, Future[Any]] = {}
         self._cancel_events: dict[str, threading.Event] = {}
@@ -86,6 +88,12 @@ class ImageryTaskService:
         self._lock = threading.Lock()
         interrupted = self.repository.mark_running_interrupted()
         self.interrupted_on_startup = interrupted
+        self.audit.record(
+            "runtime.logging_ready",
+            stage="imagery",
+            message="影像准备审计日志已启用",
+            data={"log_path": str(self.audit.path)},
+        )
 
     def close(self) -> None:
         self.executor.shutdown(wait=False, cancel_futures=False)
@@ -94,6 +102,13 @@ class ImageryTaskService:
         # Validate profiles before accepting a background job. This never contacts a provider.
         load_settings(request.model_profile, self.project_root)
         task_id = f"IMG-{uuid4().hex[:20]}"
+        self.audit.record(
+            "user.request",
+            task_id=task_id,
+            stage=ImageryTaskStatus.CREATED.value,
+            message="收到影像准备用户请求",
+            data=request.model_dump(mode="json"),
+        )
         control_dir = self.control_root / task_id
         control_dir.mkdir(parents=True, exist_ok=False)
         self.repository.create_task(
@@ -173,6 +188,13 @@ class ImageryTaskService:
             raise ImageryConflict("正式下载已开始，不能直接改写原请求")
         load_settings(request.model_profile, self.project_root)
         next_version = task_version + 1
+        self.audit.record(
+            "user.request_updated",
+            task_id=task_id,
+            stage=ImageryTaskStatus.CREATED.value,
+            message=f"用户更新任务条件到版本 {next_version}",
+            data=request.model_dump(mode="json"),
+        )
         self.repository.update_task(
             task_id,
             status=ImageryTaskStatus.CREATED.value,
@@ -203,6 +225,13 @@ class ImageryTaskService:
     def update_plan(
         self, task_id: str, update: DownloadPlanUpdateRequest
     ) -> DownloadPlan:
+        self.audit.record(
+            "user.plan_update",
+            task_id=task_id,
+            stage="plan_update",
+            message="收到用户下载计划修改",
+            data=update.model_dump(mode="json"),
+        )
         task = self._task(task_id)
         if task["status"] != ImageryTaskStatus.WAITING_DOWNLOAD_APPROVAL.value:
             raise ImageryConflict(f"当前状态不允许修改计划: {task['status']}")
@@ -272,6 +301,13 @@ class ImageryTaskService:
         return plan
 
     def approve(self, task_id: str, request: DownloadApprovalRequest) -> dict[str, Any]:
+        self.audit.record(
+            "user.download_approval",
+            task_id=task_id,
+            stage="approval",
+            message="收到用户下载确认",
+            data=request.model_dump(mode="json"),
+        )
         task = self._task(task_id)
         plan = DownloadPlan.model_validate(task["plan"])
         plan.assert_hash_matches()
@@ -336,6 +372,12 @@ class ImageryTaskService:
         return {"approval": approval.model_dump(mode="json"), "created": True}
 
     def cancel(self, task_id: str) -> dict[str, Any]:
+        self.audit.record(
+            "user.cancel",
+            task_id=task_id,
+            stage="cancel",
+            message="收到用户取消任务请求",
+        )
         task = self._task(task_id)
         if task["status"] in {
             ImageryTaskStatus.COMPLETED.value,
@@ -364,6 +406,12 @@ class ImageryTaskService:
         return {"task_id": task_id, "status": self._task(task_id)["status"]}
 
     def resume(self, task_id: str) -> dict[str, Any]:
+        self.audit.record(
+            "user.resume",
+            task_id=task_id,
+            stage="resume",
+            message="收到用户恢复任务请求",
+        )
         task = self._task(task_id)
         if task["status"] not in {
             ImageryTaskStatus.INTERRUPTED.value,
@@ -415,14 +463,16 @@ class ImageryTaskService:
             request = ImageryTaskRequest.model_validate(task["request"])
             settings = load_settings(request.model_profile, self.project_root)
             planner = ImageryPlanner(
-                create_llm(settings),
+                create_llm(settings, max_calls=self.config.max_llm_attempts),
                 self.repository,
                 self._artifacts(task_id),
                 self.events,
                 model_profile=request.model_profile,
                 prompt_version=settings.profile.prompt_version,
                 sar_recommend_clear_fraction=self.config.sar_recommend_clear_fraction,
+                max_request_repairs=self.config.max_request_repairs,
                 max_selection_repairs=self.config.max_selection_repairs,
+                audit_logger=self.audit,
             )
             with self._lock:
                 self._planners[task_id] = planner
@@ -433,6 +483,13 @@ class ImageryTaskService:
                 "aoi_name": request.aoi_name,
             }
             parsed = planner.parse_request(task_id, request, aoi_summary)
+            self.audit.record(
+                "task.decomposed",
+                task_id=task_id,
+                stage=ImageryTaskStatus.PARSING.value,
+                message="大模型任务拆解完成并进入程序校验",
+                data=parsed.model_dump(mode="json"),
+            )
             self.repository.update_task(task_id, parsed_json=parsed.model_dump(mode="json"))
             self._artifacts(task_id).write_json(
                 f"versions/{task_version}/parsed_request.json",
@@ -984,14 +1041,16 @@ class ImageryTaskService:
             request = ImageryTaskRequest.model_validate(self._task(task_id)["request"])
             settings = load_settings(request.model_profile, self.project_root)
             planner = ImageryPlanner(
-                create_llm(settings),
+                create_llm(settings, max_calls=self.config.max_llm_attempts),
                 self.repository,
                 self._artifacts(task_id),
                 self.events,
                 model_profile=request.model_profile,
                 prompt_version=settings.profile.prompt_version,
                 sar_recommend_clear_fraction=self.config.sar_recommend_clear_fraction,
+                max_request_repairs=self.config.max_request_repairs,
                 max_selection_repairs=self.config.max_selection_repairs,
+                audit_logger=self.audit,
             )
         recommendation = planner.recommend_optical(
             task_id, parsed.periods, downloaded_optical, local_quality

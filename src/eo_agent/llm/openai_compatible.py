@@ -37,7 +37,12 @@ class OpenAICompatibleAdapter:
         if not profile.api_key or not profile.base_url or not profile.model:
             raise ValueError(f"profile {profile.name} 配置不完整；不会回退到 Mock")
         self.profile = profile
-        self.client = client or httpx.Client(timeout=20.0)
+        self.client = client or httpx.Client(
+            timeout=httpx.Timeout(
+                profile.request_timeout_seconds,
+                connect=min(15.0, profile.request_timeout_seconds),
+            )
+        )
         self.max_schema_repairs = max_schema_repairs
         self.max_network_retries = max_network_retries
         self.attempt_budget = LLMAttemptBudget(max_calls)

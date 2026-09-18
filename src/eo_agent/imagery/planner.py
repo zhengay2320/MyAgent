@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
+from eo_agent.audit import AuditLogger
 from eo_agent.imagery.artifacts import ImageryArtifactStore
 from eo_agent.imagery.events import EventBroker
 from eo_agent.imagery.repository import ImageryRepository
@@ -45,8 +46,12 @@ class ImageryPlanner:
         model_profile: str,
         prompt_version: str = "imagery-v1",
         sar_recommend_clear_fraction: float = 0.55,
+        max_request_repairs: int = 1,
         max_selection_repairs: int = 1,
+        audit_logger: AuditLogger | None = None,
     ) -> None:
+        if not 0 <= max_request_repairs <= 3:
+            raise ValueError("任务拆解业务修复次数必须在 0 到 3 之间")
         if not 0 <= max_selection_repairs <= 3:
             raise ValueError("选图业务修复次数必须在 0 到 3 之间")
         self.llm = llm
@@ -56,7 +61,9 @@ class ImageryPlanner:
         self.model_profile = model_profile
         self.prompt_version = prompt_version
         self.sar_recommend_clear_fraction = sar_recommend_clear_fraction
+        self.max_request_repairs = max_request_repairs
         self.max_selection_repairs = max_selection_repairs
+        self.audit_logger = audit_logger
 
     def parse_request(
         self,
@@ -64,9 +71,11 @@ class ImageryPlanner:
         request: ImageryTaskRequest,
         aoi_summary: dict[str, Any],
     ) -> ParsedRequest:
+        authorized_requested_data = [item.value for item in request.requested_data]
         visible = {
             "query": request.query,
-            "requested_data": [item.value for item in request.requested_data],
+            "requested_data": authorized_requested_data,
+            "authorized_requested_data": authorized_requested_data,
             "user_timezone": request.user_timezone,
             "aoi_provided": bool(aoi_summary.get("aoi_provided")),
             "aoi_id": aoi_summary.get("aoi_id"),
@@ -75,41 +84,115 @@ class ImageryPlanner:
                 "do_not_expand_time": True,
                 "do_not_invent_geometry": True,
                 "query_interval": "left_closed_right_open",
+                "requested_data_must_exactly_match_authorized_list": True,
+                "quality_assessment_is_workflow_metadata_not_extra_authorization": True,
             },
+            "decision_rules": [
+                "requested_data 必须逐项复制 authorized_requested_data，不得新增或遗漏。",
+                "在线光学质量检查由程序自动执行，不能因此擅自添加 quality。",
+                "若用户只授权 optical，即使任务文字提到质量检查，也只能返回 optical。",
+                "不得擅自添加 SAR；后续是否建议 SAR 由候选质量与独立决策步骤处理。",
+            ],
         }
-        result, call_id = self._call(
-            task_id,
-            "解析用户授权的区域、时间与所需数据",
-            "imagery_parse_request",
-            visible,
-            ParsedRequest,
+        return self._parse_request_with_business_repair(
+            task_id=task_id,
+            request=request,
+            base_visible=visible,
         )
-        value = result.payload
+
+    def _parse_request_with_business_repair(
+        self,
+        *,
+        task_id: str,
+        request: ImageryTaskRequest,
+        base_visible: dict[str, Any],
+    ) -> ParsedRequest:
+        previous: ParsedRequest | None = None
+        previous_errors: list[str] = []
+        for repair_round in range(self.max_request_repairs + 1):
+            if repair_round == 0:
+                purpose = "imagery_parse_request"
+                purpose_label = "解析用户授权的区域、时间与所需数据"
+                visible = base_visible
+            else:
+                purpose = "imagery_parse_request_repair"
+                purpose_label = (
+                    "根据程序校验错误修正任务拆解"
+                    f"（修复 {repair_round}/{self.max_request_repairs}）"
+                )
+                visible = {
+                    **base_visible,
+                    "repair_round": repair_round,
+                    "previous_parsed_request": (
+                        previous.model_dump(mode="json") if previous is not None else None
+                    ),
+                    "validation_errors": previous_errors,
+                    "repair_instruction": (
+                        "只修正程序指出的字段；requested_data 必须与 "
+                        "authorized_requested_data 完全一致。不得改变用户区域、"
+                        "时区、原始请求或扩大时间范围。"
+                    ),
+                }
+            result, call_id = self._call(
+                task_id,
+                purpose_label,
+                purpose,
+                visible,
+                ParsedRequest,
+            )
+            value = result.payload
+            errors = self._validate_parsed_request(value, request, base_visible)
+            self._record_disposition(
+                task_id,
+                call_id,
+                accepted=not errors,
+                errors=errors,
+                action={
+                    "tool_name": "parse_imagery_request",
+                    "parameters": {
+                        "query": request.query,
+                        "user_timezone": request.user_timezone,
+                        "repair_round": repair_round,
+                    },
+                    "accepted": not errors,
+                    "rejection_reason": "; ".join(errors) or None,
+                    "result_summary": value.model_dump(mode="json") if not errors else None,
+                },
+            )
+            if not errors:
+                return value
+            previous = value
+            previous_errors = errors
+
+        raise LLMProposalRejected(
+            "任务拆解在 "
+            f"{self.max_request_repairs + 1} 次模型提案后仍未通过硬校验；"
+            f"已尝试业务修复 {self.max_request_repairs} 次；硬约束未放宽："
+            f"{'；'.join(previous_errors)}"
+        )
+
+    @staticmethod
+    def _validate_parsed_request(
+        value: ParsedRequest,
+        request: ImageryTaskRequest,
+        visible: dict[str, Any],
+    ) -> list[str]:
         errors: list[str] = []
         if value.original_query != request.query:
             errors.append("模型改写了用户原始请求")
         if value.original_timezone != request.user_timezone:
             errors.append("模型改写了用户时区")
-        if any(item not in request.requested_data for item in value.requested_data):
-            errors.append("模型增加了用户未授权的数据类型")
+        requested = set(request.requested_data)
+        parsed = set(value.requested_data)
+        if parsed - requested:
+            added = ", ".join(sorted(item.value for item in parsed - requested))
+            errors.append(f"模型增加了用户未授权的数据类型：{added}")
+        if requested - parsed:
+            omitted = ", ".join(sorted(item.value for item in requested - parsed))
+            errors.append(f"模型遗漏了用户已授权的数据类型：{omitted}")
         if bool(value.needs_aoi) != (not visible["aoi_provided"]):
             errors.append("模型对 AOI 是否缺失的判断与程序输入不一致")
-        self._record_disposition(
-            task_id,
-            call_id,
-            accepted=not errors,
-            errors=errors,
-            action={
-                "tool_name": "parse_imagery_request",
-                "parameters": {"query": request.query, "user_timezone": request.user_timezone},
-                "accepted": not errors,
-                "rejection_reason": "; ".join(errors) or None,
-                "result_summary": value.model_dump(mode="json") if not errors else None,
-            },
-        )
-        if errors:
-            raise LLMProposalRejected("；".join(errors))
-        return value
+        return errors
 
     def recommend_optical(
         self,
@@ -355,6 +438,14 @@ class ImageryPlanner:
         def observe(event: str, payload: dict[str, Any]) -> None:
             nonlocal last_call_id
             attempt = int(payload.get("attempt", 1))
+            if self.audit_logger is not None:
+                self.audit_logger.record(
+                    f"llm.{event}",
+                    task_id=task_id,
+                    stage=purpose,
+                    message=purpose_label,
+                    data=payload,
+                )
             call_id = attempt_ids.get(attempt)
             if event == "request":
                 call_id = f"{base_id}-A{attempt}"
@@ -467,6 +558,14 @@ class ImageryPlanner:
                 call_id=last_call_id,
                 details={"error_type": type(exc).__name__, "message": str(exc)},
             )
+            if self.audit_logger is not None:
+                self.audit_logger.record(
+                    "llm.failure",
+                    task_id=task_id,
+                    stage=purpose,
+                    message=purpose_label,
+                    data={"error_type": type(exc).__name__, "message": str(exc)},
+                )
             raise
         return result, last_call_id
 

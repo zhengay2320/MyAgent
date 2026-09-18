@@ -14,6 +14,7 @@ profiles:
     model_env: DEEPSEEK_MODEL
     prompt_version: eo-v0.1
     json_response_format: true
+    request_timeout_seconds: 60
     generation_params:
       temperature: 0
   second_compatible:
@@ -24,5 +25,5 @@ profiles:
     model_env: SECOND_MODEL
     prompt_version: eo-v0.1
     json_response_format: false
+    request_timeout_seconds: 60
     generation_params: {}
-

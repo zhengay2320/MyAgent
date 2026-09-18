@@ -127,6 +127,16 @@ def test_timeout_retry_is_bounded() -> None:
     assert calls == 2
 
 
+def test_default_client_uses_profile_request_timeout() -> None:
+    configured = profile().model_copy(update={"request_timeout_seconds": 73.0})
+    adapter = OpenAICompatibleAdapter(configured)
+    try:
+        assert adapter.client.timeout.read == 73.0
+        assert adapter.client.timeout.connect == 15.0
+    finally:
+        adapter.client.close()
+
+
 def test_empty_response_repair_is_bounded() -> None:
     calls = 0
 

@@ -99,8 +99,13 @@ def _recommendation(
 class SequenceSelectionLLM:
     """Controlled LLM double: it proposes; production validation decides."""
 
-    def __init__(self, recommendations: list[SceneRecommendation]) -> None:
+    def __init__(
+        self,
+        recommendations: list[SceneRecommendation],
+        parsed_requests: list[ParsedRequest] | None = None,
+    ) -> None:
         self.recommendations = list(recommendations)
+        self.parsed_requests = list(parsed_requests) if parsed_requests is not None else None
         self.delegate = MockLLMAdapter()
         self.visible_calls: list[tuple[str, dict[str, Any]]] = []
 
@@ -112,19 +117,24 @@ class SequenceSelectionLLM:
         observer: StructuredObserver | None = None,
     ) -> LLMResult[T]:
         self.visible_calls.append((purpose, visible_input))
-        if purpose == "imagery_parse_request":
-            value: BaseModel = ParsedRequest(
-                task_summary="测试两时期影像准备。",
-                query_mode=QueryMode.TWO_PERIOD_COMPARISON,
-                periods=_periods(),
-                requested_data=[DataKind.OPTICAL],
-                original_query=str(visible_input["query"]),
-                original_timezone=str(visible_input["user_timezone"]),
-                role_interpretation="测试显式保留两个时期。",
-                needs_aoi=False,
-                missing_fields=[],
-                extension_suggestions=[],
-            )
+        if purpose in {"imagery_parse_request", "imagery_parse_request_repair"}:
+            if self.parsed_requests is not None:
+                if not self.parsed_requests:
+                    raise AssertionError("planner 发起了超过测试序列上限的拆解调用")
+                value = self.parsed_requests.pop(0)
+            else:
+                value = ParsedRequest(
+                    task_summary="测试两时期影像准备。",
+                    query_mode=QueryMode.TWO_PERIOD_COMPARISON,
+                    periods=_periods(),
+                    requested_data=[DataKind.OPTICAL],
+                    original_query=str(visible_input["query"]),
+                    original_timezone=str(visible_input["user_timezone"]),
+                    role_interpretation="测试显式保留两个时期。",
+                    needs_aoi=False,
+                    missing_fields=[],
+                    extension_suggestions=[],
+                )
         elif purpose in {
             "imagery_recommend_scenes",
             "imagery_recommend_scenes_repair",
@@ -205,14 +215,19 @@ def _run_service(
     monkeypatch: pytest.MonkeyPatch,
     recommendations: list[SceneRecommendation],
     *,
+    parsed_requests: list[ParsedRequest] | None = None,
+    max_request_repairs: int = 1,
     max_selection_repairs: int = 1,
 ) -> tuple[ImageryTaskService, SequenceSelectionLLM, dict[str, Any]]:
-    fake = SequenceSelectionLLM(recommendations)
-    monkeypatch.setattr(service_module, "create_llm", lambda _settings: fake)
+    fake = SequenceSelectionLLM(recommendations, parsed_requests)
+    monkeypatch.setattr(
+        service_module, "create_llm", lambda _settings, **_kwargs: fake
+    )
     service = ImageryTaskService(
         tmp_path / "control",
         config=ImageryConfig(
             default_download_root=tmp_path / "downloads",
+            max_request_repairs=max_request_repairs,
             max_selection_repairs=max_selection_repairs,
         ),
     )
@@ -232,6 +247,86 @@ def _selection_calls(task: dict[str, Any]) -> list[dict[str, Any]]:
         for item in task["llm_calls"]
         if item["request"].get("purpose", "").startswith("imagery_recommend_scenes")
     ]
+
+
+def _parsed_request(query: str, requested_data: list[DataKind]) -> ParsedRequest:
+    return ParsedRequest(
+        task_summary="测试两时期影像准备。",
+        query_mode=QueryMode.TWO_PERIOD_COMPARISON,
+        periods=_periods(),
+        requested_data=requested_data,
+        original_query=query,
+        original_timezone="Asia/Shanghai",
+        role_interpretation="测试显式保留两个时期。",
+        needs_aoi=False,
+        missing_fields=[],
+        extension_suggestions=[],
+    )
+
+
+def test_parse_request_rejects_extra_quality_then_repairs_with_same_llm(
+    tmp_path, monkeypatch
+) -> None:
+    query = "准备2024年9月与2025年10月研究区的 Sentinel-2 影像"
+    service, fake, task = _run_service(
+        tmp_path,
+        monkeypatch,
+        [_recommendation([A1, B1])],
+        parsed_requests=[
+            _parsed_request(query, [DataKind.OPTICAL, DataKind.QUALITY]),
+            _parsed_request(query, [DataKind.OPTICAL]),
+        ],
+    )
+    try:
+        assert task["status"] == "WAITING_DOWNLOAD_APPROVAL", task["error"]
+        purposes = [purpose for purpose, _ in fake.visible_calls]
+        assert purposes.count("imagery_parse_request") == 1
+        assert purposes.count("imagery_parse_request_repair") == 1
+        repair_input = next(
+            value
+            for purpose, value in fake.visible_calls
+            if purpose == "imagery_parse_request_repair"
+        )
+        assert repair_input["authorized_requested_data"] == ["optical"]
+        assert repair_input["previous_parsed_request"]["requested_data"] == [
+            "optical",
+            "quality",
+        ]
+        assert "quality" in repair_input["validation_errors"][0]
+        parse_calls = [
+            item
+            for item in task["llm_calls"]
+            if item["request"].get("purpose", "").startswith("imagery_parse_request")
+        ]
+        assert len(parse_calls) == 2
+        assert parse_calls[0]["accepted"] is False
+        assert parse_calls[1]["accepted"] is True
+    finally:
+        service.close()
+
+
+def test_parse_request_repair_is_bounded_and_keeps_authorization_hard_constraint(
+    tmp_path, monkeypatch
+) -> None:
+    query = "准备2024年9月与2025年10月研究区的 Sentinel-2 影像"
+    invalid = _parsed_request(query, [DataKind.OPTICAL, DataKind.QUALITY])
+    service, fake, task = _run_service(
+        tmp_path,
+        monkeypatch,
+        [],
+        parsed_requests=[invalid, invalid],
+        max_request_repairs=1,
+    )
+    try:
+        assert task["status"] == "FAILED"
+        assert "已尝试业务修复 1 次" in task["error"]
+        assert "quality" in task["error"]
+        assert [purpose for purpose, _ in fake.visible_calls].count(
+            "imagery_parse_request_repair"
+        ) == 1
+        assert task["plan"] is None
+    finally:
+        service.close()
 
 
 def test_valid_selection_succeeds_without_repair_and_builds_plan(

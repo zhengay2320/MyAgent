@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
+from eo_agent.audit import AuditLogger
 from eo_agent.config import Settings
 from eo_agent.llm.base import LLMClient
 from eo_agent.schemas import TaskStatus, VerificationData
@@ -10,8 +11,13 @@ from eo_agent.workflow.nodes import WorkflowNodes
 from eo_agent.workflow.state import WorkflowState
 
 
-def build_graph(settings: Settings, llm: LLMClient, executor: ToolExecutor):
-    nodes = WorkflowNodes(settings, llm, executor)
+def build_graph(
+    settings: Settings,
+    llm: LLMClient,
+    executor: ToolExecutor,
+    audit_logger: AuditLogger | None = None,
+):
+    nodes = WorkflowNodes(settings, llm, executor, audit_logger)
     graph = StateGraph(WorkflowState)
     for name in (
         "parse",
