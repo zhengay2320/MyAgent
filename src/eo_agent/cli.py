@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 from pathlib import Path
 
 import uvicorn
 
 from eo_agent.api import create_app
+from eo_agent.imagery.config import load_imagery_config
+from eo_agent.imagery.providers import EarthEngineProvider, MockImageryProvider
 from eo_agent.schemas import TaskRequest, TaskStatus, WorkflowMode
 from eo_agent.service import TaskService
 
@@ -34,6 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--output-dir", default="outputs/api")
+    imagery = sub.add_parser("imagery", help="影像准备工具")
+    imagery_sub = imagery.add_subparsers(dest="imagery_command", required=True)
+    doctor = imagery_sub.add_parser("doctor", help="检查影像后端依赖与显式配置")
+    doctor.add_argument("--provider", choices=["mock", "gee"], default="mock")
+    doctor.add_argument("--check-remote", action="store_true")
     return parser
 
 
@@ -52,6 +61,24 @@ def _print_result(result) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "imagery":
+        config = load_imagery_config()
+        provider = (
+            MockImageryProvider()
+            if args.provider == "mock"
+            else EarthEngineProvider(
+                project_id=os.getenv("EE_PROJECT_ID"),
+                max_catalog_limit=config.catalog_limit_per_window,
+                max_request_uncompressed_mib=config.max_request_uncompressed_mib,
+            )
+        )
+        result = dict(provider.doctor(check_remote=args.check_remote))
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        ready = bool(result.get("ready")) or result.get("status") in {
+            "local_ready",
+            "remote_ready",
+        }
+        return 0 if ready else 2
     if args.command == "serve":
         uvicorn.run(create_app(Path(args.output_dir)), host=args.host, port=args.port)
         return 0
