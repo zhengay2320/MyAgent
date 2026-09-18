@@ -422,6 +422,7 @@ class ImageryTaskService:
                 model_profile=request.model_profile,
                 prompt_version=settings.profile.prompt_version,
                 sar_recommend_clear_fraction=self.config.sar_recommend_clear_fraction,
+                max_selection_repairs=self.config.max_selection_repairs,
             )
             with self._lock:
                 self._planners[task_id] = planner
@@ -990,6 +991,7 @@ class ImageryTaskService:
                 model_profile=request.model_profile,
                 prompt_version=settings.profile.prompt_version,
                 sar_recommend_clear_fraction=self.config.sar_recommend_clear_fraction,
+                max_selection_repairs=self.config.max_selection_repairs,
             )
         recommendation = planner.recommend_optical(
             task_id, parsed.periods, downloaded_optical, local_quality

@@ -236,7 +236,10 @@ class MockLLMAdapter:
                 missing_fields=missing,
                 extension_suggestions=[],
             )
-        elif purpose == "imagery_recommend_scenes":
+        elif purpose in {
+            "imagery_recommend_scenes",
+            "imagery_recommend_scenes_repair",
+        }:
             from eo_agent.imagery.schemas import (
                 SarRecommendation,
                 SarRecommendationStatus,

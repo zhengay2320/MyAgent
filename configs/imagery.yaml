@@ -14,6 +14,7 @@ max_download_concurrency: 2
 max_download_retries: 2
 max_llm_schema_repairs: 1
 max_llm_attempts: 12
+max_selection_repairs: 1
 max_request_uncompressed_mib: 24
 mock_download_chunk_bytes: 16384
 single_process: true

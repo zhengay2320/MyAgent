@@ -27,6 +27,18 @@ py -3.11 -m venv .venv
 python -m pip install -e ".[dev,imagery]"
 ```
 
+若 PowerShell 管道或命令捕获把中文显示成 `æ¨¡å...` 一类乱码，可在当前终端先执行：
+
+```powershell
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new()
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+$OutputEncoding = [Console]::OutputEncoding
+$env:PYTHONUTF8 = "1"
+```
+
+这只调整终端显示和 Python 标准流编码。SQLite/JSON 均按 UTF-8 保存，不应为修复终端显示而转码
+数据库或已有产物。
+
 Linux/macOS：
 
 ```bash
@@ -130,6 +142,11 @@ python -m eo_agent serve --host 127.0.0.1 --port 8000 --output-dir outputs/api
 搜索和小型预览不等于正式下载：流程必须停在 `WAITING_DOWNLOAD_APPROVAL`，只有用户确认当前
 `plan_version`、`plan_hash`、候选、波段、共享网格和目录后才创建正式文件。刷新页面只按 task ID
 恢复；不会重新检索或重复下载。
+
+光学选择要求每个 `required_period_id` 恰好一景。模型首次违反该硬约束时，程序会保留
+`action.rejected` 轨迹，并把原输出、逐时期错误和同一白名单反馈给同一个模型修复；默认最多修复
+一次，由 `configs/imagery.yaml` 的 `max_selection_repairs` 控制。修复仍占用同一 LLM 调用预算，
+达到上限后明确失败，程序不会代替模型选择候选或放宽时期约束。
 
 默认下载根目录是项目中的 `data/downloads/`，每个任务实际写入独立的
 `data/downloads/<task_id>/`。页面可修改根目录，并会显示解析后的绝对路径；该目录位于运行

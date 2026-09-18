@@ -18,7 +18,12 @@ from eo_agent.imagery.schemas import (
     SceneRecommendation,
     SearchPeriod,
 )
-from eo_agent.llm.base import LLMClient, LLMResult
+from eo_agent.llm.base import (
+    LLMClient,
+    LLMResult,
+    build_structured_messages,
+    redact_for_log,
+)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -40,7 +45,10 @@ class ImageryPlanner:
         model_profile: str,
         prompt_version: str = "imagery-v1",
         sar_recommend_clear_fraction: float = 0.55,
+        max_selection_repairs: int = 1,
     ) -> None:
+        if not 0 <= max_selection_repairs <= 3:
+            raise ValueError("选图业务修复次数必须在 0 到 3 之间")
         self.llm = llm
         self.repository = repository
         self.artifacts = artifacts
@@ -48,6 +56,7 @@ class ImageryPlanner:
         self.model_profile = model_profile
         self.prompt_version = prompt_version
         self.sar_recommend_clear_fraction = sar_recommend_clear_fraction
+        self.max_selection_repairs = max_selection_repairs
 
     def parse_request(
         self,
@@ -126,51 +135,131 @@ class ImageryPlanner:
             }
             for item in candidates
         ]
+        candidates_by_period: dict[str, list[dict[str, Any]]] = {
+            period.period_id: [] for period in periods
+        }
+        for candidate in visible_candidates:
+            candidates_by_period.setdefault(str(candidate["period_id"]), []).append(candidate)
+        required_period_ids = [period.period_id for period in periods]
+        selection_constraints = {
+            "exactly_one_optical_per_period": True,
+            "all_periods_must_be_covered": True,
+            "only_candidate_ids_are_allowed": True,
+            "do_not_expand_or_change_periods": True,
+            "sar_does_not_replace_optical_selection": True,
+        }
         visible = {
             "periods": [item.model_dump(mode="json") for item in periods],
+            "required_period_ids": required_period_ids,
             "candidates": visible_candidates,
+            "candidates_by_period": candidates_by_period,
+            "selection_constraints": selection_constraints,
             "sar_recommend_clear_fraction": self.sar_recommend_clear_fraction,
             "decision_rules": [
-                "先比较同一授权窗口的替代光学观测",
-                "覆盖不足与质量未知不能解释为无云",
-                "只能引用 candidates 中存在的 ID",
+                "必须为每一个 required_period_id 选择且只能选择一个光学候选。",
+                "如果有 N 个时期，selected_optical_candidate_ids 必须包含 N 个光学候选。",
+                "不得为同一个时期选择多个光学候选而遗漏另一个时期。",
+                "只能从该时期对应的 candidates_by_period 中选择 candidate_id。",
+                "不允许改变 period、扩大时间范围或编造候选。",
+                "SAR 推荐与光学选择是不同问题；即使建议 SAR，每个时期仍必须先完成合法的光学选择。",
+                "先比较同一授权窗口的替代光学观测；覆盖不足与质量未知不能解释为无云。",
             ],
         }
-        result, call_id = self._call(
-            task_id,
-            "依据研究区内质量从真实候选池推荐光学影像并判断是否建议 SAR",
-            "imagery_recommend_scenes",
-            visible,
-            SceneRecommendation,
+        return self._recommend_with_business_repair(
+            task_id=task_id,
+            periods=periods,
+            candidates=candidates,
+            base_visible=visible,
         )
-        errors = _validate_recommendation(result.payload, periods, candidates, require_optical=True)
-        value = result.payload.model_copy(
-            update={"accepted_by_program": not errors, "validation_errors": errors}
-        )
-        self._record_disposition(
-            task_id,
-            call_id,
-            accepted=not errors,
-            errors=errors,
-            action={
-                "tool_name": "select_catalog_candidates",
-                "parameters": {
-                    "selected_optical_candidate_ids": value.selected_optical_candidate_ids,
-                    "sar_recommendation": value.sar_recommendation.status.value,
-                },
-                "accepted": not errors,
-                "rejection_reason": "; ".join(errors) or None,
-                "result_summary": {
-                    "selected_count": len(value.selected_optical_candidate_ids),
-                    "recommended_period_ids": value.sar_recommendation.recommended_period_ids,
+
+    def _recommend_with_business_repair(
+        self,
+        *,
+        task_id: str,
+        periods: list[SearchPeriod],
+        candidates: list[SceneCandidate],
+        base_visible: dict[str, Any],
+    ) -> SceneRecommendation:
+        previous: SceneRecommendation | None = None
+        previous_errors: list[str] = []
+        for repair_round in range(self.max_selection_repairs + 1):
+            if repair_round == 0:
+                purpose = "imagery_recommend_scenes"
+                purpose_label = "依据研究区内质量从真实候选池推荐光学影像并判断是否建议 SAR"
+                visible = base_visible
+            else:
+                purpose = "imagery_recommend_scenes_repair"
+                purpose_label = (
+                    "根据程序选图校验错误修正光学候选选择"
+                    f"（修复 {repair_round}/{self.max_selection_repairs}）"
+                )
+                visible = {
+                    **base_visible,
+                    "repair_round": repair_round,
+                    "previous_recommendation": (
+                        previous.model_dump(mode="json") if previous is not None else None
+                    ),
+                    "validation_errors": previous_errors,
+                    "repair_instruction": (
+                        "根据程序校验错误重新选择。只修正候选选择与相关说明；"
+                        "不得改变或扩大用户时间范围，不得引用候选池外 ID，"
+                        "不得用 SAR 代替任一时期的光学候选。"
+                    ),
                 }
-                if not errors
-                else None,
-            },
+            result, call_id = self._call(
+                task_id,
+                purpose_label,
+                purpose,
+                visible,
+                SceneRecommendation,
+            )
+            errors = _validate_recommendation(
+                result.payload,
+                periods,
+                candidates,
+                require_optical=True,
+            )
+            value = result.payload.model_copy(
+                update={"accepted_by_program": not errors, "validation_errors": errors}
+            )
+            self._record_disposition(
+                task_id,
+                call_id,
+                accepted=not errors,
+                errors=errors,
+                action={
+                    "tool_name": "select_catalog_candidates",
+                    "parameters": {
+                        "selected_optical_candidate_ids": (
+                            value.selected_optical_candidate_ids
+                        ),
+                        "sar_recommendation": value.sar_recommendation.status.value,
+                        "repair_round": repair_round,
+                    },
+                    "accepted": not errors,
+                    "rejection_reason": "; ".join(errors) or None,
+                    "result_summary": {
+                        "selected_count": len(value.selected_optical_candidate_ids),
+                        "required_period_count": len(periods),
+                        "recommended_period_ids": (
+                            value.sar_recommendation.recommended_period_ids
+                        ),
+                    }
+                    if not errors
+                    else None,
+                },
+            )
+            if not errors:
+                return value
+            previous = value
+            previous_errors = errors
+
+        raise LLMProposalRejected(
+            "光学选图在 "
+            f"{self.max_selection_repairs + 1} 次模型提案后仍未通过硬校验；"
+            f"已尝试业务修复 {self.max_selection_repairs} 次；硬约束未放宽："
+            f"{'；'.join(previous_errors)}"
         )
-        if errors:
-            raise LLMProposalRejected("；".join(errors))
-        return value
 
     def finalize_sar(
         self,
@@ -344,12 +433,22 @@ class ImageryPlanner:
             )
         except Exception as exc:
             if not attempt_ids:
-                request = {
-                    "purpose": purpose,
-                    "attempt": 0,
-                    "message": "请求在发送前失败或调用预算已耗尽",
-                    "error_type": type(exc).__name__,
-                }
+                request = redact_for_log(
+                    {
+                        "purpose": purpose,
+                        "attempt": 0,
+                        "request_sent": False,
+                        "message": "请求在发送前失败或调用预算已耗尽",
+                        "error_type": type(exc).__name__,
+                        "payload": {
+                            "model_profile": self.model_profile,
+                            "messages": build_structured_messages(
+                                purpose, visible_input, schema
+                            ),
+                        },
+                        "schema": schema.model_json_schema(),
+                    }
+                )
                 self.repository.start_llm_call(base_id, task_id, purpose_label, request)
                 self.repository.finish_llm_call(
                     base_id,

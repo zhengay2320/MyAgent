@@ -28,6 +28,7 @@ class ImageryConfig(BaseModel):
     max_download_retries: int = Field(default=2, ge=0, le=5)
     max_llm_schema_repairs: int = Field(default=1, ge=0, le=3)
     max_llm_attempts: int = Field(default=12, ge=1, le=50)
+    max_selection_repairs: int = Field(default=1, ge=0, le=3)
     max_request_uncompressed_mib: int = Field(default=24, ge=1, le=31)
     mock_download_chunk_bytes: int = Field(default=16384, ge=1024)
     single_process: bool = True
