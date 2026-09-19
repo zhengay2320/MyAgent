@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import math
 import os
+import re
 import shutil
 import threading
 from collections.abc import Mapping
@@ -716,14 +718,15 @@ class ImageryTaskService:
                     rgb = self._fetch_preview(urls.rgb_url)
                     quality = self._fetch_preview(urls.quality_url)
                 store = self._artifacts(task_id)
+                artifact_stem = _safe_preview_artifact_stem(candidate.candidate_id)
                 rgb_id = store.write_bytes(
-                    f"previews/{candidate.candidate_id}-rgb.png",
+                    f"previews/{artifact_stem}-rgb.png",
                     rgb,
                     "image/png",
                     provider.is_mock,
                 )
                 quality_id = store.write_bytes(
-                    f"previews/{candidate.candidate_id}-quality.png",
+                    f"previews/{artifact_stem}-quality.png",
                     quality,
                     "image/png",
                     provider.is_mock,
@@ -1352,6 +1355,14 @@ class ImageryTaskService:
         self._artifacts(task_id).write_json(
             "task.json", task, contains_mock, artifact_id="task-snapshot"
         )
+
+
+def _safe_preview_artifact_stem(candidate_id: str) -> str:
+    """Map provider IDs to collision-resistant filenames valid on Windows and POSIX."""
+
+    normalized = re.sub(r"[^A-Za-z0-9_-]+", "-", candidate_id).strip("-")
+    digest = hashlib.sha256(candidate_id.encode("utf-8")).hexdigest()[:12]
+    return f"{normalized[:96] or 'candidate'}-{digest}"
 
 
 def task_request_from_patch(value: Mapping[str, Any]) -> tuple[ImageryTaskRequest, int]:

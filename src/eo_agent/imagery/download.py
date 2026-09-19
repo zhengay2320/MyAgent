@@ -502,7 +502,8 @@ def validate_geotiff(path: Path, item: DownloadFile) -> dict[str, Any]:
             if dataset.count != len(item.bands):
                 raise DownloadValidationError("GeoTIFF 波段数与批准计划不一致")
             descriptions = list(dataset.descriptions)
-            if descriptions != item.bands:
+            descriptions_missing = all(value is None for value in descriptions)
+            if not descriptions_missing and descriptions != item.bands:
                 raise DownloadValidationError("GeoTIFF 波段名称或顺序与批准计划不一致")
             if dataset.crs is None:
                 raise DownloadValidationError("GeoTIFF 缺少 CRS")
@@ -527,6 +528,11 @@ def validate_geotiff(path: Path, item: DownloadFile) -> dict[str, Any]:
             valid_count = int(np.ma.count(data))
             if valid_count == 0:
                 raise DownloadValidationError("GeoTIFF 全部为 nodata")
+            warnings = [f"有效像元值数量：{valid_count}"]
+            if descriptions_missing:
+                warnings.append(
+                    "Earth Engine GeoTIFF 未嵌入波段描述；波段身份按已审批请求顺序与波段数校验。"
+                )
             verification = FileVerification(
                 passed=True,
                 size_bytes=path.stat().st_size,
@@ -537,7 +543,7 @@ def validate_geotiff(path: Path, item: DownloadFile) -> dict[str, Any]:
                 bands_match_plan=True,
                 grid_matches_plan=True,
                 all_nodata=False,
-                warnings=[f"有效像元值数量：{valid_count}"],
+                warnings=warnings,
             )
             return verification.model_dump(mode="json")
     except DownloadValidationError:

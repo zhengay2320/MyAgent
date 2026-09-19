@@ -12,7 +12,19 @@ from eo_agent.imagery.schemas import (
     DownloadPlanUpdateRequest,
     ImageryTaskRequest,
 )
-from eo_agent.imagery.service import ImageryConflict, ImageryTaskService
+from eo_agent.imagery.service import (
+    ImageryConflict,
+    ImageryTaskService,
+    _safe_preview_artifact_stem,
+)
+
+
+def test_real_candidate_id_maps_to_windows_safe_preview_filename() -> None:
+    stem = _safe_preview_artifact_stem(
+        "gee:s2:20240910T025529_20240910T030847_T50RKU"
+    )
+    assert ":" not in stem
+    assert stem.startswith("gee-s2-")
 
 
 def wait_for(service: ImageryTaskService, task_id: str, states: set[str], timeout: float = 15):

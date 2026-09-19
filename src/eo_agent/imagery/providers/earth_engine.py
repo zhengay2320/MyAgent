@@ -601,9 +601,9 @@ class EarthEngineProvider:
             "crs": crs,
             "crs_transform": transform_values,
             "dimensions": [width, height],
-            # Official API ignores region when crs + transform are supplied;
-            # clip above enforces the user/tile geometry nevertheless.
-            "region": region,
+            # Earth Engine rejects region + crs_transform + dimensions together.
+            # The exact approved grid is expressed by transform/dimensions, while
+            # clip above still enforces the approved user/tile geometry.
             "format": "GEO_TIFF",
             "filePerBand": False,
         }
@@ -1122,6 +1122,19 @@ class EarthEngineProvider:
                 ProviderFailureKind.REMOTE,
                 f"{operation}失败：Earth Engine 暂时不可用。",
                 retryable=True,
+                cause=exc,
+            )
+        if status in {400} or any(
+            token in text
+            for token in (
+                "invalid argument",
+                "cannot specify",
+                "invalid request",
+            )
+        ):
+            return ImageryProviderError(
+                ProviderFailureKind.INVALID_REQUEST,
+                f"{operation}失败：Earth Engine 拒绝了下载参数；请检查审批网格与请求组合。",
                 cause=exc,
             )
         if any(

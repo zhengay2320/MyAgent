@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+import rasterio
 
 from eo_agent.imagery.aoi import AOIValidationError, normalize_geojson
 from eo_agent.imagery.download import validate_geotiff
@@ -130,6 +131,12 @@ def test_mock_provider_generates_openable_aligned_geotiff(tmp_path) -> None:
     assert result["passed"] is True
     assert result["bands_match_plan"] is True
 
+    with rasterio.open(destination, "r+") as dataset:
+        dataset.descriptions = tuple(None for _ in range(dataset.count))
+    without_descriptions = validate_geotiff(destination, item)
+    assert without_descriptions["passed"] is True
+    assert any("未嵌入波段描述" in value for value in without_descriptions["warnings"])
+
 
 def test_synthetic_aoi_is_rejected_for_real_search_plan() -> None:
     aoi = normalize_geojson(AOI, source=AOISource.SYNTHETIC_MOCK)
@@ -228,6 +235,8 @@ def test_gee_download_request_uses_approved_exact_grid_and_never_logs_url() -> N
     )
     assert captured["parameters"]["dimensions"] == [32, 24]
     assert captured["parameters"]["crs_transform"] == [20, 0, 238920, 0, -20, 3385100]
+    assert "region" not in captured["parameters"]
+    assert captured["clip"] == AOI
     assert captured["parameters"]["format"] == "GEO_TIFF"
     assert "signed-secret" not in repr(request)
     assert "signed-secret" not in str(request.to_log_dict())
